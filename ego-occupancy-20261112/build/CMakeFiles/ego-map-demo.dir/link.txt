@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG "CMakeFiles/ego-map-demo.dir/apps/map_demo.cpp.o" -o ego-map-demo  libego_occupancy.a 

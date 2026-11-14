@@ -1,0 +1,2 @@
+/usr/bin/ar qc libego_display_color.a CMakeFiles/ego_display_color.dir/src/display_color.cpp.o
+/usr/bin/ranlib libego_display_color.a

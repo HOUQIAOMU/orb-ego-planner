@@ -1,0 +1,2 @@
+/usr/bin/ar qc libego_occupancy_rgbd.a CMakeFiles/ego_occupancy_rgbd.dir/src/depth.cpp.o CMakeFiles/ego_occupancy_rgbd.dir/src/worker.cpp.o CMakeFiles/ego_occupancy_rgbd.dir/src/current_frame.cpp.o
+/usr/bin/ranlib libego_occupancy_rgbd.a

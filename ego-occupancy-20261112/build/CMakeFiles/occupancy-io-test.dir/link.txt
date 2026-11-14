@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG "CMakeFiles/occupancy-io-test.dir/tests/io_test.cpp.o" -o occupancy-io-test  libego_occupancy.a 

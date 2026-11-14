@@ -1,0 +1,15 @@
+{
+  "old_ego_root": "/home/lckfb/orb-slam3/tools/ego-occupancy-20261112",
+  "original_manifest_sha256": "8a9b7c259d275b0d364d547725793654bb7b7eadd70d14cebba8072c68e21603",
+  "original_patched_core_sha256": "2194f04abea305edd648f96c2dfacb6af45a4ba3107d2c36800b578a98c5e570",
+  "patched_objects": {
+    "LoopClosing.cc.o": "8e8730b70bc80604a07c316a77b504d632408d0c14b581f61c5d4a6d9002894d",
+    "Tracking.cc.o": "ef3dc419fde6e4836344b6d1d2103638cd4f09813d1a7db76f40568a8e1ac21a",
+    "System.cc.o": "c5f14cdf75866546019f68a99333b1930f876dbc2a79a5b3094c74d8af9598de"
+  },
+  "patched_sources": {
+    "System.cc": "6f4dee52290e14bc9442890e1603b1a9bb774c5821cbae5a55cc141990b7bdc4",
+    "Tracking.cc": "bf2bc458c43297e44c60e0d0f1a351bc3beb466fa0a4ffffe25d3525cdd0d190",
+    "LoopClosing.cc": "db02b54ed82cc0349b28e9c6b0f1a8d2b89685e7e7067a879262d32f6faa88d2"
+  }
+}

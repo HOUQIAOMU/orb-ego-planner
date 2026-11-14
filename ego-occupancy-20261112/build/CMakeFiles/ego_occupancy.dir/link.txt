@@ -1,0 +1,2 @@
+/usr/bin/ar qc libego_occupancy.a CMakeFiles/ego_occupancy.dir/src/map.cpp.o CMakeFiles/ego_occupancy.dir/src/io.cpp.o
+/usr/bin/ranlib libego_occupancy.a
