@@ -1,2 +1,0 @@
-/usr/bin/ar qc libego_occupancy_display.a CMakeFiles/ego_occupancy_display.dir/src/display.cpp.o
-/usr/bin/ranlib libego_occupancy_display.a

@@ -1,13 +1,10 @@
 #include <ego_occupancy/io.h>
 #include <ego_occupancy/options.h>
 #include <ego_occupancy/worker.h>
-
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/resource.h>
 #include <unistd.h>
-
-#include <opencv2/imgcodecs.hpp>
 
 #include <csignal>
 #include <cstdint>
@@ -18,10 +15,16 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <opencv2/imgcodecs.hpp>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#ifdef EGO_HAS_PLANNER
+#include "online_planning_session.h"
+#include "planning_io.h"
+#endif
 
 #ifdef EGO_HAS_DISPLAY
 #include <ego_occupancy/display.h>
@@ -86,9 +89,8 @@ std::vector<Input> LoadSequence(const Options& options, const CameraModel& camer
     std::string extra;
     std::istringstream stream(line);
     if (!(stream >> input.color_sec >> color_name >> input.depth_sec >> depth_name) ||
-        (stream >> extra) || !std::isfinite(input.color_sec) ||
-        !std::isfinite(input.depth_sec) || input.color_sec <= previous_color ||
-        input.depth_sec <= previous_depth ||
+        (stream >> extra) || !std::isfinite(input.color_sec) || !std::isfinite(input.depth_sec) ||
+        input.color_sec <= previous_color || input.depth_sec <= previous_depth ||
         std::abs(input.color_sec - input.depth_sec) > 0.010) {
       throw std::invalid_argument("invalid/unpaired/nonmonotonic RGB-D association");
     }
@@ -107,10 +109,8 @@ std::vector<Input> LoadSequence(const Options& options, const CameraModel& camer
   const auto color = cv::imread(inputs[0].color.string(), cv::IMREAD_UNCHANGED);
   const auto depth = cv::imread(inputs[0].depth.string(), cv::IMREAD_UNCHANGED);
   if (color.type() != CV_8UC3 || depth.type() != CV_16UC1 ||
-      color.size() != cv::Size(camera.width, camera.height) ||
-      depth.size() != color.size()) {
-    throw std::invalid_argument(
-        "sequence images differ from BGR8/aligned Z16 calibration");
+      color.size() != cv::Size(camera.width, camera.height) || depth.size() != color.size()) {
+    throw std::invalid_argument("sequence images differ from BGR8/aligned Z16 calibration");
   }
   return inputs;
 }
@@ -203,6 +203,15 @@ int Run(int argc, char** argv) {
     }
 #endif
 
+#ifdef EGO_HAS_PLANNER
+    if (!options.planning_config.empty()) {
+      const auto pc = ego_planner::app::loadPlanningConfig(options.planning_config);
+      ego_planner::validateConfig(pc);
+    }
+#else
+    if (!options.planning_config.empty())
+      throw std::invalid_argument("build has no planner; use the online build entry");
+#endif
     std::cout << "INPUT_VALIDATED mode=" << (options.live ? "live" : "replay")
               << " pairs=" << inputs.size() << " resolution_m=" << config.resolution
               << " stride=" << options.stride << " no_ROS no_IMU\n";
@@ -229,6 +238,15 @@ int Run(int argc, char** argv) {
   ego_pose_bridge::Initialize(session ? session : 1);
 
   MappingWorker mapping(config, camera, options.output / "mapping.csv");
+#ifdef EGO_HAS_PLANNER
+  std::unique_ptr<ego_planner::app::OnlinePlanningSession> planning;
+  if (!options.planning_config.empty()) {
+    fs::copy_file(options.planning_config, options.output / "planning-config.yaml");
+    planning = std::make_unique<ego_planner::app::OnlinePlanningSession>(
+        mapping.reader(), ego_planner::app::loadPlanningConfig(options.planning_config),
+        options.output / "planning", options.probe_start_m, options.probe_goal_m);
+  }
+#endif
 
 #ifdef EGO_HAS_DISPLAY
   std::unique_ptr<OccupancyDisplay> display;
@@ -239,6 +257,13 @@ int Run(int argc, char** argv) {
     } else if (options.display_color == "flat") {
       display_settings.color_mode = ColorMode::Flat;
     }
+#ifdef EGO_HAS_PLANNER
+    if (planning) {
+      display_settings.planning_layer = [&planning] { return planning->layer(); };
+      display_settings.trigger_planning = [&planning] { planning->trigger(); };
+      display_settings.clear_planning = [&planning] { planning->clear(); };
+    }
+#endif
     display_settings.metrics_path = options.output / "display.csv";
     display = std::make_unique<OccupancyDisplay>(mapping.reader(), camera,
                                                  options.output / "occupancy.png",
@@ -285,8 +310,7 @@ int Run(int argc, char** argv) {
 #endif
 
       if (options.max_seconds > 0 &&
-          std::chrono::duration<double>(Clock::now() - started).count() >=
-              options.max_seconds) {
+          std::chrono::duration<double>(Clock::now() - started).count() >= options.max_seconds) {
         break;
       }
 
@@ -300,8 +324,7 @@ int Run(int argc, char** argv) {
         }
       } else {
         if (processed >= inputs.size() ||
-            (options.max_frames &&
-             processed >= static_cast<std::uint64_t>(options.max_frames))) {
+            (options.max_frames && processed >= static_cast<std::uint64_t>(options.max_frames))) {
           break;
         }
 
@@ -328,9 +351,11 @@ int Run(int argc, char** argv) {
       const auto record = ego_pose_bridge::Last();
       ++processed;
 
-      const bool bound = record.captured &&
-                         record.timestamp_sec == frame->color_sec &&
+      const bool bound = record.captured && record.timestamp_sec == frame->color_sec &&
                          ego_pose_bridge::IsCurrent(record);
+#ifdef EGO_HAS_PLANNER
+      if (planning) planning->update(record, frame->index, frame->received, bound);
+#endif
       if (bound) {
         ++valid;
       } else {
@@ -339,34 +364,34 @@ int Run(int argc, char** argv) {
 
 #ifdef EGO_HAS_DISPLAY
       if (display) {
-        display->publishCurrentFrame(frame->color, record, frame->index,
-                                     frame->received, bound);
+        display->publishCurrentFrame(frame->color, record, frame->index, frame->received, bound);
       }
 #endif
 
       const Eigen::Map<const Eigen::Matrix4f> transform(record.T_world_camera.data());
       tracking << frame->index << ',' << record.frame_id << ',' << frame->color_sec << ','
-               << frame->depth_sec << ',' << record.tracking_state << ','
-               << record.captured << ',' << bound << ',' << record.session << ','
-               << record.map_token << ',' << record.revision << ','
+               << frame->depth_sec << ',' << record.tracking_state << ',' << record.captured << ','
+               << bound << ',' << record.session << ',' << record.map_token << ','
+               << record.revision << ','
                << std::chrono::duration<double, std::milli>(after - before).count() << ','
-               << transform(0, 3) << ',' << transform(1, 3) << ',' << transform(2, 3)
-               << '\n';
+               << transform(0, 3) << ',' << transform(1, 3) << ',' << transform(2, 3) << '\n';
       tracking.flush();
 
-      if (bound &&
-          (frame->color_sec - last_map_time >= 1.0 / options.mapping_hz)) {
+      if (bound && (frame->color_sec - last_map_time >= 1.0 / options.mapping_hz)) {
         if (mapping.submit(frame->depth, record, frame->index, frame->received)) {
           last_submitted = frame->index;
           have_submitted = true;
           last_map_time = frame->color_sec;
-          if (!options.live &&
-              !mapping.waitFor(last_submitted, std::chrono::seconds(10))) {
+          if (!options.live && !mapping.waitFor(last_submitted, std::chrono::seconds(10))) {
             throw std::runtime_error("offline mapping worker timeout");
           }
         }
       }
 
+#ifdef EGO_HAS_PLANNER
+      if (planning && !planning->error().empty())
+        throw std::runtime_error("online planning failed: " + planning->error());
+#endif
       const auto stats = mapping.stats();
       if (!stats.error.empty()) {
         throw std::runtime_error(stats.error);
@@ -374,12 +399,11 @@ int Run(int argc, char** argv) {
 
       if (std::chrono::duration<double>(after - last_progress).count() >= 1) {
         std::cout << "MAP_PROGRESS processed=" << processed << " verified=" << valid
-                  << " state=" << record.tracking_state
-                  << " revision=" << record.revision << " fused=" << stats.fused
-                  << " rejected=" << stats.rejected << " queue_drop=" << stats.dropped
-                  << " fuse_ms=" << stats.last_fuse_ms
-                  << " inflate_ms=" << stats.last_inflate_ms
-                  << " age_ms=" << stats.last_age_ms << '\n';
+                  << " state=" << record.tracking_state << " revision=" << record.revision
+                  << " fused=" << stats.fused << " rejected=" << stats.rejected
+                  << " queue_drop=" << stats.dropped << " fuse_ms=" << stats.last_fuse_ms
+                  << " inflate_ms=" << stats.last_inflate_ms << " age_ms=" << stats.last_age_ms
+                  << '\n';
         last_progress = after;
       }
     }
@@ -393,11 +417,20 @@ int Run(int argc, char** argv) {
       failure = live->error();
     }
   }
-  if (have_submitted &&
-      !mapping.waitFor(last_submitted, std::chrono::seconds(10)) && failure.empty()) {
+  if (have_submitted && !mapping.waitFor(last_submitted, std::chrono::seconds(10)) &&
+      failure.empty()) {
     failure = "mapping drain timeout";
   }
 
+#ifdef EGO_HAS_DISPLAY
+  if (display) display->stop();
+#endif
+#ifdef EGO_HAS_PLANNER
+  if (planning) {
+    planning->stop();
+    if (!planning->error().empty()) failure = "online planning failed: " + planning->error();
+  }
+#endif
   mapping.stop();
   auto stats = mapping.stats();
   if (!stats.error.empty()) {
@@ -424,25 +457,24 @@ int Run(int argc, char** argv) {
     }
   }
 
-  struct rusage memory {};
+  struct rusage memory{};
   getrusage(RUSAGE_SELF, &memory);
   LiveStats live_stats;
   if (live) {
     live_stats = live->stats();
   }
 
-  cv::FileStorage summary((options.output / "summary.yml").string(),
-                          cv::FileStorage::WRITE);
+  cv::FileStorage summary((options.output / "summary.yml").string(), cv::FileStorage::WRITE);
   if (!summary.isOpened()) {
     throw std::runtime_error("cannot write summary");
   }
   summary << "mode" << (options.live ? "live" : "replay") << "processed"
-          << static_cast<double>(processed) << "verified_poses"
-          << static_cast<double>(valid) << "fused" << static_cast<double>(stats.fused)
-          << "mapping_rejected" << static_cast<double>(stats.rejected)
-          << "mapping_queue_dropped" << static_cast<double>(stats.dropped)
-          << "snapshot_publish_skipped" << static_cast<double>(stats.publish_skipped)
-          << "source_events" << static_cast<double>(stats.source_events) << "captured"
+          << static_cast<double>(processed) << "verified_poses" << static_cast<double>(valid)
+          << "fused" << static_cast<double>(stats.fused) << "mapping_rejected"
+          << static_cast<double>(stats.rejected) << "mapping_queue_dropped"
+          << static_cast<double>(stats.dropped) << "snapshot_publish_skipped"
+          << static_cast<double>(stats.publish_skipped) << "source_events"
+          << static_cast<double>(stats.source_events) << "captured"
           << static_cast<double>(live_stats.captured) << "recorded"
           << static_cast<double>(live_stats.recorded) << "pair_rejected"
           << static_cast<double>(live_stats.pair_rejected) << "sdk_color_gaps"
@@ -454,10 +486,8 @@ int Run(int argc, char** argv) {
 
   std::cout << "MAPPING_FINISHED processed=" << processed << " verified=" << valid
             << " fused=" << stats.fused << " snapshot=" << bool(snapshot)
-            << " captured=" << live_stats.captured
-            << " recorded=" << live_stats.recorded
-            << " peak_rss_mib=" << memory.ru_maxrss / 1024.0
-            << " failure=" << failure << '\n';
+            << " captured=" << live_stats.captured << " recorded=" << live_stats.recorded
+            << " peak_rss_mib=" << memory.ru_maxrss / 1024.0 << " failure=" << failure << '\n';
 
   if (!failure.empty()) {
     return 1;

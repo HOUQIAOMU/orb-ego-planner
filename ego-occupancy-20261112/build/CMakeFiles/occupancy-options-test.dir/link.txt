@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG "CMakeFiles/occupancy-options-test.dir/tests/options_test.cpp.o" -o occupancy-options-test  libego_mapping_options.a 

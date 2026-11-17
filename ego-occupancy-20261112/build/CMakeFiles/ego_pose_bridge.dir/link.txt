@@ -1,1 +1,0 @@
-/usr/bin/c++ -fPIC -O3 -DNDEBUG -shared -Wl,-soname,libego_pose_bridge.so -o libego_pose_bridge.so CMakeFiles/ego_pose_bridge.dir/bridge/pose_bridge.cpp.o 

@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG "CMakeFiles/occupancy-map-test.dir/tests/map_test.cpp.o" -o occupancy-map-test  libego_occupancy.a 

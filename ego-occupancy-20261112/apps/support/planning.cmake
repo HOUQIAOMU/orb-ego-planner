@@ -1,0 +1,7 @@
+add_library(ego_planning_io "${PROJECT_SOURCE_DIR}/apps/support/src/planning_io.cpp")
+target_include_directories(ego_planning_io PUBLIC "${PROJECT_SOURCE_DIR}/apps/support/include")
+target_link_libraries(ego_planning_io PUBLIC ego_planner_core)
+ego_warnings(ego_planning_io STRICT)
+add_library(ego_online_session "${PROJECT_SOURCE_DIR}/apps/support/src/online_planning_session.cpp")
+target_link_libraries(ego_online_session PUBLIC ego_planner_runtime ego_planning_io ego_pose_bridge ego_display_contract)
+ego_warnings(ego_online_session STRICT)

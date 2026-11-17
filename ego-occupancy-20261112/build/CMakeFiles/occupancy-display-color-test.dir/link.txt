@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG "CMakeFiles/occupancy-display-color-test.dir/tests/display_color_test.cpp.o" -o occupancy-display-color-test  libego_display_color.a 

@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG "CMakeFiles/ego-map-inspect.dir/apps/map_inspect.cpp.o" -o ego-map-inspect  libego_occupancy.a 

@@ -1,2 +1,0 @@
-/usr/bin/ar qc libego_mapping_options.a CMakeFiles/ego_mapping_options.dir/src/options.cpp.o
-/usr/bin/ranlib libego_mapping_options.a
