@@ -1,0 +1,17 @@
+%YAML:1.0
+# Test parameters only; choose flight clearance from measured vehicle/pose/depth error.
+# RGB-D-only ORB starts in the first camera's optical axes: X right, Y down,
+# Z forward. Use a deeper Z extent here; this is NOT a gravity-aligned frame.
+size_m: [8., 4., 8.]
+resolution_m: 0.05
+inflation_m: [0.10, 0.10, 0.10]
+min_ray_m: 0.10
+max_ray_m: 4.5
+max_age_sec: 0.5
+p_hit: 0.70
+p_miss: 0.35
+p_min: 0.12
+p_max: 0.97
+p_free: 0.35
+p_occ: 0.80
+frame_id: "slam_local"

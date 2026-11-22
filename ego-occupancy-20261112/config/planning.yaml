@@ -1,0 +1,21 @@
+# 手持离线实验参数，单位m/s/rad；不代表真实无人机尺寸或动力学。
+# 只支持平面key:value和[x,y,z]，未知/重复键会拒绝。
+half_extent: [0.05, 0.05, 0.05]
+nominal_speed: 0.5
+max_velocity: 1.0
+max_acceleration: 2.0
+control_point_spacing: 0.15
+roi_margin: 0.5
+soft_clearance: 0.05
+smoothness_weight: 1.0
+collision_weight: 50.0
+feasibility_weight: 0.1
+fitness_weight: 0.1
+max_control_points: 64
+max_roi_voxels: 500000
+max_validation_visits: 300000
+max_subdivision_depth: 22
+max_iterations: 120
+max_restarts: 4
+max_time_adjustments: 3
+allow_roi_expansion: true

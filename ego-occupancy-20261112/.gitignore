@@ -1,0 +1,5 @@
+# Reproducible outputs only; core/obj is an intentional relink input.
+/build/
+/build-*/
+__pycache__/
+*.py[cod]

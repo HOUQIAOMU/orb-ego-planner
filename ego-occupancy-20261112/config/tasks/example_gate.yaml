@@ -1,0 +1,17 @@
+# 对应tests/support/fixtures.py的合成open.egovox；不是当前真实场景坐标。
+request_id: 1
+goal_version: 1
+start_position: [-0.725, 0.025, 0.025]
+goal_position: [0.725, 0.025, 0.025]
+start_velocity: [0, 0, 0]
+start_acceleration: [0, 0, 0]
+goal_velocity: [0, 0, 0]
+goal_acceleration: [0, 0, 0]
+reference_0: [-0.25, 0.025, 0.025]
+reference_1: [0.25, 0.025, 0.025]
+gate_center: [0.025, 0, 0]
+gate_normal: [1, 0, 0]
+gate_u: [0, 1, 0]
+gate_v: [0, 0, 1]
+gate_half_width: 0.25
+gate_half_height: 0.25
