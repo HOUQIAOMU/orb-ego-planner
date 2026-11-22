@@ -1,0 +1,88 @@
+// ============================================================================
+//  04_mapping_loop.dot  --  GridMap 建图循环：深度图 → 两个体素缓冲
+// ============================================================================
+digraph mapping
+{
+  graph [rankdir=TB, bgcolor="white", splines=true, newrank=true,
+         fontname="WenQuanYi Micro Hei", fontsize=13,
+         nodesep=0.32, ranksep=0.70, pad=0.22];
+  node  [shape=box, style="rounded,filled", fontname="WenQuanYi Micro Hei",
+         fontsize=10, penwidth=1.1, margin="0.10,0.06"];
+  edge  [fontname="WenQuanYi Micro Hei", fontsize=7.8, color="#5f5f5f",
+         fontcolor="#101010", arrowsize=0.65];
+
+  labelloc="t";
+  label=<<b>占据地图建立：GridMap 的 20 Hz 融合循环与两个体素缓冲</b><br/>
+         <font point-size="9">plan_env/src/grid_map.cpp　·　关键参数取自 plan_manage/launch/advanced_param.xml</font>>;
+  fontsize=14;
+
+  // ---------- 输入 ----------
+  subgraph cluster_src
+  {
+    label=<<b>输入</b>>; labeljust="l"; fontsize=10.5;
+    color="#4a7ebb"; style="rounded"; bgcolor="#eaf2fb";
+
+    depth [label=<<b>grid_map/depth</b><br/><font point-size="8">sensor_msgs/Image 640×480<br/>30 Hz（sensing_rate）</font>>, fillcolor="#cfe2f3", shape=note];
+    pose  [label=<<b>grid_map/pose</b><br/><font point-size="8">geometry_msgs/PoseStamped<br/>30 Hz　pose_type = 1</font>>, fillcolor="#cfe2f3", shape=note];
+    odom2 [label=<<b>grid_map/odom</b><br/><font point-size="8">nav_msgs/Odometry<br/>pose_type = 2 时代替 pose</font>>, fillcolor="#cfe2f3", shape=note];
+    cloud [label=<<b>grid_map/cloud</b><br/><font point-size="8">sensor_msgs/PointCloud2<br/>Lidar / 点云替代方案</font>>, fillcolor="#cfe2f3", shape=note];
+  }
+
+  sync [label=<<b>message_filters::ApproximateTime</b><br/><font point-size="8">depth ⟷ pose（或 odom）<br/>队列 100<br/>→ depthPoseCallback / depthOdomCallback<br/>→ occ_need_update_ = true</font>>, fillcolor="#d6e6f7", shape=box3d];
+
+  // ---------- 20 Hz 主循环 ----------
+  subgraph cluster_loop
+  {
+    label=<<b>updateOccupancyCallback　occ_timer_ = 0.05 s → 20 Hz</b>>;
+    labeljust="l"; fontsize=10.5; color="#e07b00"; style="rounded"; bgcolor="#fdf1e3";
+
+    gate [label=<<b>门控</b><br/><font point-size="8">!occ_need_update_ → return<br/>并检查深度/里程计超时<br/>(odom_depth_timeout 1.0 s)</font>>, fillcolor="#fadfba", shape=diamond, margin="0.02,0.02"];
+
+    proj [label=<<b>projectDepthImage()</b><br/><font point-size="8">内参 cx cy fx fy<br/>skip_pixel = 2（降采样）<br/>depth_filter: mindist 0.2 / maxdist 5.0<br/>/ tolerance 0.15 / margin 2<br/>→ proj_points_ (世界坐标点)</font>>, fillcolor="#fadfba"];
+
+    ray  [label=<<b>raycastProcess()</b><br/><font point-size="8">沿射线从相机到测点做 Bresenham<br/>min_ray_length 0.1 / max_ray_length 4.5 m<br/>命中 → count_hit_++<br/>穿越 → count_hit_and_miss_++<br/>→ cache_voxel_ 延迟批处理</font>>, fillcolor="#fadfba"];
+
+    fuse [label=<<b>setCacheOccupancy → 对数几率融合</b><br/><font point-size="8">prob_hit_log = logit(0.65)<br/>prob_miss_log = logit(0.35)<br/>结果 clamp 到 [logit(0.12), logit(0.90)]<br/>未知初值 = logit(0.12) − 0.01</font>>, fillcolor="#ffe0b2", penwidth=1.6];
+
+    infl [label=<<b>clearAndInflateLocalMap()</b><br/><font point-size="8">① 把 local_bound_ ± local_map_margin_(10 格)<br/>　 之外的 log-odds 重置为 unknown<br/>② 只清 local_bound_ 内的 inflate 缓冲<br/>③ 对 occupancy &gt; logit(0.80) 的体素做膨胀<br/>　 inf_step = ceil(0.099/0.1) = 1 格<br/>④ virtual_ceil_height 2.9 m 整层置 1</font>>, fillcolor="#f8c37e", penwidth=2.0];
+  }
+
+  // ---------- 两个缓冲 ----------
+  occbuf [label=<<b>occupancy_buffer_</b><br/><font point-size="8">std::vector&lt;double&gt;<br/>长度 = Nx·Ny·Nz，按 x·Ny·Nz + y·Nz + z 展平<br/><b>log-odds 概率，含 unknown 语义</b><br/>isUnknown / isKnownFree 才区分未知与自由</font>>, fillcolor="#fff2cc", shape=box3d, penwidth=1.6];
+
+  infbuf [label=<<b>occupancy_buffer_inflate_</b><br/><font point-size="8">std::vector&lt;char&gt;，初始全 0<br/><b>只有 0 / 1，没有 unknown</b><br/>1 = 本体占据 或 落在膨胀邻域内<br/>0 = 其余（已知自由 ∪ 完全未知）</font>>, fillcolor="#ffe0b2", shape=box3d, penwidth=2.4];
+
+  // ---------- 消费者 ----------
+  subgraph cluster_use
+  {
+    label=<<b>消费者</b>>; labeljust="l"; fontsize=10.5;
+    color="#2e7d32"; style="rounded"; bgcolor="#eef7ee";
+
+    astar2 [label=<<b>A*：checkOccupancy(pos)</b><br/><font point-size="8">→ getInflateOccupancy(pos)<br/>越界 −1 被 (bool) 转成 true<br/>→ 地图外一律视为障碍</font>>, fillcolor="#fff9c4"];
+    opt2   [label=<<b>BsplineOptimizer</b><br/><font point-size="8">getInflateOccupancy + getResolution()<br/>（采样步长、cost 梯度）</font>>, fillcolor="#dcedc8"];
+    safe   [label=<<b>FSM 安全线程</b><br/><font point-size="8">20 Hz 前向采样查碰<br/>+ getOdomDepthTimeout()</font>>, fillcolor="#c8e6c9"];
+    vis    [label=<<b>可视化 / 我加的 inspector</b><br/><font point-size="8">0.11 s 发 occupancy /<br/>occupancy_inflate 点云</font>>, fillcolor="#e0e0e0"];
+  }
+
+  // ---------- 边 ----------
+  depth -> sync [label="30 Hz"];
+  pose  -> sync [label="30 Hz"];
+  odom2 -> sync [style=dashed];
+  cloud -> fuse [label="cloudCallback（独立通路）", style=dashed];
+
+  sync -> gate [label="occ_need_update_\n（30 Hz 生产，20 Hz 消费）"];
+  gate -> proj [label="需要更新"];
+  proj -> ray  [label="proj_points_"];
+  ray  -> fuse [label="cache_voxel_ 批量"];
+  fuse -> occbuf [style=bold, label="写 log-odds"];
+  fuse -> infl  [label="local_updated_ = true"];
+  infl -> infbuf [style=bold, label="重建 0/1"];
+
+  occbuf -> infl  [label="读取是否 &gt; logit(0.80)\n作为膨胀种子", style=dashed, color="#e07b00", fontcolor="#a04d00"];
+  occbuf -> vis  [style=dotted];
+  infbuf -> astar2 [color="#c62828", penwidth=1.8, fontcolor="#c62828", label="唯一接口"];
+  infbuf -> opt2   [color="#c62828", penwidth=1.8, fontcolor="#c62828"];
+  infbuf -> safe   [color="#c62828", penwidth=1.6, fontcolor="#c62828"];
+  infbuf -> vis    [style=dotted];
+  fuse   -> safe   [label="last_occ_update_time_", style=dashed, color="#00695c", fontcolor="#00695c"];
+}

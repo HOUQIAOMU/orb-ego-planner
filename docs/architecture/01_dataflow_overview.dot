@@ -1,0 +1,112 @@
+// ============================================================================
+//  01_dataflow_overview.dot  --  EGO-Planner 全链路数据流总览
+//  渲染：dot -Tsvg 01_dataflow_overview.dot -o 01_dataflow_overview.svg
+//        dot -Tpng -Gdpi=150 01_dataflow_overview.dot -o 01_dataflow_overview.png
+// ============================================================================
+digraph overview
+{
+  graph [rankdir=TB, bgcolor="white", compound=true, splines=true, newrank=true,
+         fontname="WenQuanYi Micro Hei", fontsize=13,
+         nodesep=0.28, ranksep=0.85, pad=0.25];
+  node  [shape=box, style="rounded,filled", fontname="WenQuanYi Micro Hei",
+         fontsize=10, penwidth=1.1, margin="0.12,0.07", fillcolor="#f5f5f5"];
+  edge  [fontname="WenQuanYi Micro Hei", fontsize=8, color="#5f5f5f",
+         fontcolor="#202020", arrowsize=0.7, penwidth=1.0];
+  labelloc="t";
+  label=<<b>EGO-Planner 全链路数据流总览</b><br/><font point-size="9">传感器 → 占据地图 → 规划（状态机 + 前端 + 后端）→ 控制　　单机 drone_0 为例</font>>;
+  fontsize=14;
+
+  // ---------------- 传感器 / 仿真 ----------------
+  subgraph cluster_sensor
+  {
+    label=<<b>① 传感器（仿真）</b>>; labeljust="l"; fontsize=11;
+    color="#4a7ebb"; style="rounded"; bgcolor="#eaf2fb";
+
+    render [label=<<b>pcl_render_node</b><br/><font point-size="8">sensing_horizon = 5.0 m<br/>sensing_rate = 30 Hz</font>>, fillcolor="#cfe2f3"];
+
+    d2o    [label=<<b>poscmd_2_odom</b><br/><font point-size="8">每收到一条 PositionCommand<br/>就发一帧 odom（≈100 Hz）</font>>, fillcolor="#cfe2f3"];
+
+    so3    [label=<<b>so3_control</b> + 动力学<br/><font point-size="8">只闭环飞行，不参与规划</font>>, fillcolor="#cfe2f3"];
+  }
+
+  // ---------------- 建图 ----------------
+  subgraph cluster_map
+  {
+    label=<<b>② 占据地图 GridMap（plan_env）</b>>; labeljust="l"; fontsize=11;
+    color="#e07b00"; style="rounded"; bgcolor="#fdf1e3";
+
+    sync   [label=<<b>depth / pose 同步</b><br/><font point-size="8">ApproximateTime<br/>pose_type = 1 (POSE_STAMPED)<br/>pose_type = 2 (ODOMETRY)</font>>, fillcolor="#fadfba"];
+
+    occ    [label=<<b>updateOccupancyCallback</b><br/><font point-size="8"><b>0.05 s → 20 Hz</b><br/>occ_timer_</font>>, fillcolor="#f8c37e"];
+
+    ray    [label=<<b>射线投射</b><br/><font point-size="8">projectDepthImage<br/>raycastProcess<br/>clearAndInflateLocalMap</font>>, fillcolor="#fadfba"];
+
+    occ_buf  [label=<<b>occupancy_buffer_</b><br/><font point-size="8">vector&lt;double&gt;<br/>log-odds 概率<br/>含 unknown 语义</font>>, fillcolor="#fff2cc", shape=box3d];
+    inf_buf  [label=<<b>occupancy_buffer_inflate_</b><br/><font point-size="8">vector&lt;char&gt; 0/1<br/><b>膨胀占据</b><br/>A* 与优化的唯一入口</font>>, fillcolor="#ffe0b2", shape=box3d, penwidth=2.2];
+
+    vis    [label=<<b>visCallback</b><br/><font point-size="8">0.11 s → ≈9 Hz<br/>publishMap / publishMapInflate</font>>, fillcolor="#fadfba"];
+  }
+
+  // ---------------- 规划 ----------------
+  subgraph cluster_plan
+  {
+    label=<<b>③ 规划 ego_planner_node（plan_manage + bspline_opt + path_searching）</b>>;
+    labeljust="l"; fontsize=11; color="#2e7d32"; style="rounded"; bgcolor="#eef7ee";
+
+    fsm    [label=<<b>EGOReplanFSM 状态机</b><br/><font point-size="8">exec_timer_  0.01 s → <b>100 Hz</b><br/>safety_timer_ 0.05 s → <b>20 Hz</b></font>>, fillcolor="#c8e6c9", penwidth=2.0];
+
+    glob   [label=<<b>planGlobalTraj()</b><br/><font point-size="8">每个目标仅调用 1 次<br/>min-snap 多项式<br/><b>零地图查询 / 从不更新</b></font>>, fillcolor="#dcedc8"];
+
+    local  [label=<<b>reboundReplan()</b><br/><font point-size="8">稳态 <b>1 Hz</b>（replan_thresh 1.0 s）<br/>+ 安全线程 20 Hz 事件触发</font>>, fillcolor="#dcedc8"];
+
+    astar  [label=<<b>AStar::AstarSearch</b><br/><font point-size="8">step 0.1 m，池 100³<br/>局部 ±5 m，0.2 s 超时<br/>只产出“推挤方向”</font>>, fillcolor="#fff9c4"];
+
+    opt    [label=<<b>BsplineOptimizer</b><br/><font point-size="8">L-BFGS ≤200 iter<br/>distance / smooth / feasibility<br/>/ swarm / fitness 五项 cost</font>>, fillcolor="#dcedc8"];
+
+    out    [label=<<b>planning/bspline</b><br/><font point-size="8">traj_utils/Bspline<br/>order=3, knots, pos_pts<br/>traj_id, start_time</font>>, fillcolor="#ffffff", penwidth=1.6];
+  }
+
+  // ---------------- 控制 ----------------
+  subgraph cluster_ctrl
+  {
+    label=<<b>④ 执行</b>>; labeljust="l"; fontsize=11;
+    color="#6a4c93"; style="rounded"; bgcolor="#f2edf8";
+
+    server [label=<<b>traj_server</b><br/><font point-size="8">createTimer 0.01 s → <b>100 Hz</b><br/>evaluateDeBoorT(t - start_time)</font>>, fillcolor="#d9c9ea"];
+    poscmd [label=<<b>PositionCommand</b><br/><font point-size="8">pos / vel / acc / yaw / yaw_dot<br/>→ /drone_0_planning/pos_cmd</font>>, fillcolor="#ffffff", penwidth=1.6];
+  }
+
+  // ---------------- 数据流边 ----------------
+  render -> sync [label="grid_map/depth   sensor_msgs/Image   30 Hz"];
+  render -> sync [label="grid_map/pose    PoseStamped        30 Hz", style=dashed];
+  render -> sync [label="grid_map/cloud   PointCloud2        （Lidar 替代方案）", style=invis];
+
+  sync  -> occ  [label="occ_need_update_ = true"];
+  occ   -> ray  [label="每 20 Hz 执行一次融合"];
+  ray   -> occ_buf [style=bold];
+  ray   -> inf_buf [label="obstacles_inflation 0.099 m ≈ 1 格", style=bold];
+
+  inf_buf -> vis [dir=back];
+  occ_buf -> vis [dir=back];
+
+  // 地图 -> 规划（关键：规划栈只读 inflate 二值图）
+  inf_buf -> astar [label="getInflateOccupancy(pos) → 0/1\n地图外返回 -1 → 视为障碍", color="#c62828", penwidth=1.8, fontcolor="#c62828"];
+  inf_buf -> opt   [label="getInflateOccupancy + getResolution(0.1)", color="#c62828", penwidth=1.8, fontcolor="#c62828"];
+  inf_buf -> fsm   [label="getOdomDepthTimeout()\n→ EMERGENCY_STOP", color="#c62828", style=dashed, fontsize=7.5];
+
+  d2o   -> fsm  [label="odom_world  nav_msgs/Odometry  ≈100 Hz\npos(x,y,z) / vel = twist.linear\nacc 藏在 twist.angular", color="#1a237e", penwidth=1.6, fontcolor="#1a237e"];
+  d2o   -> sync [label="grid_map/odom  Odometry", style=dashed];
+
+  fsm  -> glob  [label="planNextWaypoint()\n（新目标时）"];
+  fsm  -> local [label="各状态调用"];
+  local -> astar [label="initControlPoints()\n仅对碰撞 segment"];
+  astar -> local [label="base_point[] / direction[]", style=dashed];
+  local -> opt   [style=bold];
+  opt   -> out   [label="updateTrajInfo()\n→ local_data_"];
+
+  out -> server [label="planning/bspline\n1 次/成功重规划", penwidth=1.6];
+  server -> poscmd [style=bold];
+  poscmd -> so3  [label="控制闭环"];
+  so3 -> d2o     [label="真实状态", style=dashed, constraint=false];
+  poscmd -> d2o  [label="~command（仿真里 odom 直接由指令积分）", style=dashed, color="#888888", fontsize=7.5];
+}

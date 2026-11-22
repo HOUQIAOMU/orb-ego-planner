@@ -1,0 +1,95 @@
+// ============================================================================
+//  02_fsm_states.dot  --  EGOReplanFSM 状态机：状态 / 转移条件 / 主要函数与接口
+// ============================================================================
+digraph fsm
+{
+  graph [rankdir=LR, bgcolor="white", splines=true, newrank=true,
+         fontname="WenQuanYi Micro Hei", fontsize=13,
+         nodesep=0.35, ranksep=0.95, pad=0.25];
+  node  [shape=box, style="rounded,filled", fontname="WenQuanYi Micro Hei",
+         fontsize=10, penwidth=1.3, margin="0.12,0.08"];
+  edge  [fontname="WenQuanYi Micro Hei", fontsize=7.8, color="#5f5f5f",
+         fontcolor="#101010", arrowsize=0.65];
+
+  labelloc="t";
+  label=<<b>EGOReplanFSM 状态机（plan_manage/src/ego_replan_fsm.cpp）</b><br/>
+         <font point-size="9">圆角框内为该状态调用的主要函数与接口；边上的方括号是 changeFSMExecState(..) 的调用来源</font>>;
+  fontsize=14;
+
+  // ---------------- 外部输入事件 ----------------
+  subgraph cluster_in
+  {
+    label=<<b>外部回调（状态机的输入）</b>>; labeljust="l"; fontsize=10.5;
+    color="#4a7ebb"; style="rounded"; bgcolor="#eaf2fb";
+
+    odomcb  [label=<<b>odometryCallback</b><br/><font point-size="8">odom_world : nav_msgs/Odometry<br/>≈100 Hz<br/>→ odom_pos_ / odom_vel_ / odom_orient_<br/>→ have_odom_ = true</font>>, fillcolor="#cfe2f3", shape=note];
+    wpcb    [label=<<b>waypointCallback</b><br/><font point-size="8">/move_base_simple/goal : PoseStamped<br/>→ planNextWaypoint(end_wp)</font>>, fillcolor="#cfe2f3", shape=note];
+    trigcb  [label=<<b>triggerCallback</b><br/><font point-size="8">/traj_start_trigger<br/>→ have_trigger_ = true</font>>, fillcolor="#cfe2f3", shape=note];
+    bcastcb [label=<<b>BroadcastBsplineCallback</b><br/><font point-size="8">planning/broadcast_bspline_to_planner<br/>→ swarm_trajs_buf_[id]<br/>→ checkCollision(id)</font>>, fillcolor="#cfe2f3", shape=note];
+    swarmcb [label=<<b>swarmTrajsCallback</b><br/><font point-size="8">/drone_N-1_planning/swarm_trajs<br/>→ have_recv_pre_agent_ = true</font>>, fillcolor="#cfe2f3", shape=note];
+  }
+
+  // ---------------- 定时器 ----------------
+  subgraph cluster_timer
+  {
+    label=<<b>两个定时器</b>>; labeljust="l"; fontsize=10.5;
+    color="#6a1b9a"; style="rounded"; bgcolor="#f3e8f9";
+
+    exectmr  [label=<<b>execFSMCallback</b><br/><font point-size="8"><b>createTimer 0.01 s → 100 Hz</b><br/>入口 exec_timer_.stop()<br/>出口 exec_timer_.start()</font>>, fillcolor="#d9c9ea", shape=octagon];
+    safetmr  [label=<<b>checkCollisionCallback</b><br/><font point-size="8"><b>createTimer 0.05 s → 20 Hz</b><br/>沿轨迹前向 0.01 s 步长采样<br/>只查前 2/3 段</font>>, fillcolor="#d9c9ea", shape=octagon];
+  }
+
+  // ---------------- 状态 ----------------
+  INIT      [label=<<b>INIT</b><br/><font point-size="8">仅等待里程计<br/>不调用任何规划函数</font>>, fillcolor="#eceff1"];
+
+  WAIT      [label=<<b>WAIT_TARGET</b><br/><font point-size="8">守卫：have_target_ &amp;&amp; have_trigger_<br/>否则 force_return</font>>, fillcolor="#eceff1"];
+
+  SEQ       [label=<<b>SEQUENTIAL_START</b><br/><font point-size="8">planFromGlobalTraj(10)<br/>→ callReboundReplan(true, rand)<br/>→ EGOPlannerManager::reboundReplan(<br/>　start_pt_, start_vel_, start_acc_,<br/>　local_target_pt_, local_target_vel_,<br/>　flag_polyInit, flag_randomPolyTraj)<br/>成功: publishSwarmTrajs(true)</font>>, fillcolor="#c8e6c9"];
+
+  GEN       [label=<<b>GEN_NEW_TRAJ</b><br/><font point-size="8">planFromGlobalTraj(10)<br/>起点 = odom_pos_ / odom_vel_ / 0<br/>flag_polyInit = true<br/>flag_randomPolyTraj =<br/>　(连续调用次数 &gt; 1)<br/>成功: publishSwarmTrajs(false)</font>>, fillcolor="#c8e6c9"];
+
+  REP       [label=<<b>REPLAN_TRAJ</b><br/><font point-size="8">planFromCurrentTraj(1)<br/>起点 = local_data_.position_traj_<br/>　　　.evaluateDeBoorT(t_cur) 三阶状态<br/>三级退让：<br/>① (false,false) 续接旧轨迹<br/>② (true,false) 多项式初始化<br/>③ (true,true) × trial_times 随机</font>>, fillcolor="#c8e6c9"];
+
+  EXEC      [label=<<b>EXEC_TRAJ</b><br/><font point-size="8">不规划，只判定是否重规划<br/>t_cur = now - local_data_.start_time_<br/>getLocalTarget() 前推 7.5 m<br/>planNextWaypoint() 换航点</font>>, fillcolor="#fff59d", penwidth=2.2];
+
+  EMER      [label=<<b>EMERGENCY_STOP</b><br/><font point-size="8">callEmergencyStop(odom_pos_)<br/>→ EGOPlannerManager::EmergencyStop(stop_pos)<br/>6 个重合控制点 + ts=1.0<br/>→ 原地悬停 3 s</font>>, fillcolor="#ffcdd2", penwidth=2.0];
+
+  // ---------------- 转移 ----------------
+  INIT  -> WAIT  [label="have_odom_ = true\n[FSM]"];
+  WAIT  -> SEQ   [label="have_target_ && have_trigger_\n[FSM]"];
+  WAIT  -> GEN   [label="planNextWaypoint() 在 WAIT_TARGET 中被调用\n[TRIG]", style=dashed];
+
+  SEQ   -> EXEC  [label="planFromGlobalTraj(10) == true\n且 (drone_id ≤ 0 || have_recv_pre_agent_)\n[FSM]", penwidth=1.6];
+  SEQ   -> SEQ   [label="失败: 自转移\n[FSM]（连续调用计数 +1）", style=dashed];
+
+  GEN   -> EXEC  [label="planFromGlobalTraj(10) == true\n[FSM]", penwidth=1.6];
+  GEN   -> GEN   [label="失败: 自转移\n[FSM]（连续调用计数 +1\n→ 下一次启用随机初始化）", style=dashed];
+
+  REP   -> EXEC  [label="planFromCurrentTraj(1) == true\n[FSM]", penwidth=1.6];
+  REP   -> REP   [label="失败: 自转移\n[FSM]（10 ms 后重试）", style=dashed];
+
+  // EXEC 的三类重规划触发
+  EXEC  -> REP   [label="① t_cur > replan_thresh_ (1.0 s)\n　　→ 稳态 1 Hz 周期重规划\n[FSM]", color="#1a237e", fontcolor="#1a237e", penwidth=1.8];
+  EXEC  -> REP   [label="② 到预设航点 → planNextWaypoint(next)\n[TRIG]", color="#1a237e", fontcolor="#1a237e"];
+  EXEC  -> REP   [label="③ 他机轨迹冲突\ncheckCollision(id) == true\n[TRAJ_CHECK]", color="#00695c", fontcolor="#00695c"];
+  EXEC  -> EMER  [label="前方 emergency_time_ (1.0 s) 内碰撞\n且 planFromCurrentTraj() 失败\n[SAFETY]", color="#b71c1c", fontcolor="#b71c1c", penwidth=1.6];
+  EXEC  -> WAIT  [label="到达最终目标 && t_cur > duration_-1e-2\n→ have_target_=false\n→ have_trigger_=false\n【注意：此后无外部触发则永久停留】\n[FSM]", color="#b71c1c", fontcolor="#b71c1c", style=dashed];
+
+  // 安全线程的旁路（不经过 EXEC 状态机分支）
+  safetmr -> REP  [label="碰撞在 emergency_time_ 之外\n→ 直接 changeFSMExecState(REPLAN_TRAJ)\n[SAFETY]", color="#00695c", fontcolor="#00695c", style=bold];
+  safetmr -> EMER [label="getOdomDepthTimeout()\n（深度/里程计超时 1.0 s）\n且 enable_fail_safe_=false\n[SAFETY]", color="#00695c", fontcolor="#00695c", style=bold];
+  safetmr -> EXEC [label="能现场修好\nplanFromCurrentTraj() == true\n[SAFETY]（状态不变）", color="#00695c", fontcolor="#00695c"];
+
+  EMER  -> GEN   [label="enable_fail_safe_ && |odom_vel_| < 0.1\n[FSM]", penwidth=1.6];
+  EMER  -> EMER  [label="flag_escape_emergency_ 为真\n（首次进入才真正发悬停指令）", style=dashed];
+
+  // 回调 -> 状态机
+  odomcb  -> WAIT  [style=dotted, color="#4a7ebb", arrowhead=none];
+  wpcb    -> GEN   [style=dotted, color="#4a7ebb", arrowhead=none];
+  trigcb  -> WAIT  [style=dotted, color="#4a7ebb", arrowhead=none];
+  bcastcb -> REP   [style=dotted, color="#4a7ebb", arrowhead=none];
+  swarmcb -> SEQ   [style=dotted, color="#4a7ebb", arrowhead=none];
+  exectmr -> EXEC  [style=dotted, color="#6a1b9a", arrowhead=none];
+
+  { rank=same; WAIT; GEN; REP; EXEC; }
+}

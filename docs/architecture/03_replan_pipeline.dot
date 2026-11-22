@@ -1,0 +1,110 @@
+// ============================================================================
+//  03_replan_pipeline.dot  --  单次重规划 reboundReplan 内部流程与数据
+// ============================================================================
+digraph replan
+{
+  graph [rankdir=TB, bgcolor="white", splines=true, newrank=true,
+         fontname="WenQuanYi Micro Hei", fontsize=13,
+         nodesep=0.30, ranksep=0.45, pad=0.22];
+  node  [shape=box, style="rounded,filled", fontname="WenQuanYi Micro Hei",
+         fontsize=10, penwidth=1.1, margin="0.10,0.06"];
+  edge  [fontname="WenQuanYi Micro Hei", fontsize=7.8, color="#5f5f5f",
+         fontcolor="#101010", arrowsize=0.65];
+
+  labelloc="t";
+  label=<<b>单次重规划：EGOPlannerManager::reboundReplan(...) 内部的 STEP 1/2/3</b><br/>
+         <font point-size="9">触发一次 ≈ 1 Hz（另有 20 Hz 安全线程事件触发）；一次调用内部可能调用 A* 数十次</font>>;
+  fontsize=14;
+
+  // ---------- 输入 ----------
+  subgraph cluster_in
+  {
+    label=<<b>① 输入状态变量（由 FSM 在调用前设定）</b>>; labeljust="l"; fontsize=10.5;
+    color="#4a7ebb"; style="rounded"; bgcolor="#eaf2fb";
+
+    sin [label=<<b>start_pt_ / start_vel_ / start_acc_</b><br/><font point-size="8">首次规划(planFromGlobalTraj)：<br/>odom_pos_ / odom_vel_ / Vector3d::Zero()<br/><br/>重规划(planFromCurrentTraj)：<br/>local_data_.position_traj_.evaluateDeBoorT(t_cur)<br/>local_data_.velocity_traj_.evaluateDeBoorT(t_cur)<br/>local_data_.acceleration_traj_.evaluateDeBoorT(t_cur)</font>>, fillcolor="#cfe2f3", shape=note];
+
+    tin [label=<<b>local_target_pt_ / local_target_vel_</b><br/><font point-size="8">getLocalTarget()：沿 global_data_.global_traj_<br/>前推 planning_horizen_ = 7.5 m（t_step = 7.5/20/max_vel）<br/>临近终点则 vel 置零</font>>, fillcolor="#cfe2f3", shape=note];
+
+    gin [label=<<b>global_data_.global_traj_</b><br/><font point-size="8">min-snap 多项式，每个目标只生成 1 次<br/><b>此后永不更新</b>（详见 02 图）</font>>, fillcolor="#e3f2fd"];
+  }
+
+  { rank=same; sin; tin; gin; }
+
+  gu [label=<<b>守卫</b><br/><font point-size="8">‖start_pt_ − local_target_pt_‖ &lt; 0.2 → return false<br/>（“Close to goal”）</font>>, fillcolor="#ffcdd2"];
+
+  ts [label=<<b>确定 knot span</b><br/><font point-size="8">ts = ctrl_pt_dist / max_vel × 1.5<br/>= 0.4 / 2.0 × 1.5 = 0.3 s<br/>（终点很近时 ×5）</font>>, fillcolor="#fff9c4"];
+
+  // ---------- STEP 1 ----------
+  subgraph cluster_step1
+  {
+    label=<<b>STEP 2·INIT：生成初始控制点 ctrl_pts</b>>; labeljust="l"; fontsize=10.5;
+    color="#2e7d32"; style="rounded"; bgcolor="#eef7ee";
+
+    br  [label=<<b>分支判定</b><br/><font point-size="8">flag_first_call || flag_polyInit<br/>|| flag_force_polynomial ?</font>>, fillcolor="#dcedc8", shape=diamond, margin="0.02,0.02"];
+
+    polyA [label=<<b>A 多项式初始化</b><br/><font point-size="8">one_segment_traj_gen(start, end, T)<br/>或 flag_randomPolyTraj 时插入随机点<br/>→ minSnapTraj<br/>再 ts /= 1.5 细化到点数 ≥ 7</font>>, fillcolor="#dcedc8"];
+
+    polyB [label=<<b>B 续接上一条 B 样条</b><br/><font point-size="8">从 t_cur 采样 local_data_.position_traj_<br/>算伪弧长并均匀重采样<br/>末端不够长则接一段多项式<br/>过长(&gt; horizon/ctrl_pt_dist×3) → 强制回 A</font>>, fillcolor="#dcedc8"];
+
+    param [label=<<b>UniformBspline::parameterizeToBspline</b><br/><font point-size="8">(ts, point_set, start_end_derivatives, ctrl_pts)<br/>输出 K+6 个控制点</font>>, fillcolor="#ffffff"];
+
+    icp   [label=<<b>BsplineOptimizer::initControlPoints(ctrl_pts, true)</b><br/><font point-size="8">沿 ctrl_pts 逐点 getInflateOccupancy<br/>标记碰撞 segment → segments</font>>, fillcolor="#fff9c4", penwidth=1.8];
+  }
+
+  // ---------- A* ----------
+  astar [label=<<b>AStar::AstarSearch(step_size=0.1, in, out)</b><br/><font point-size="8">已膨胀二值图上做 26 邻域 A*；池 100³，center=(in+out)/2<br/>有效窗口 center ± 5 m；超出地图 → getInflateOccupancy 返回 −1 → 视为障碍<br/>硬超时 0.2 s；失败则本次规划 return false</font>>, fillcolor="#ffcc80", penwidth=2.2];
+
+  bp [label=<<b>base_point[] / direction[]</b><br/><font point-size="8">A* 路径与控制点连线的交点<br/>→ 控制点的“推挤基点 / 推挤方向”<br/><b>A* 的全部产出仅此而已，不是轨迹</b></font>>, fillcolor="#ffe0b2", shape=note];
+
+  // ---------- STEP 2 ----------
+  subgraph cluster_step2
+  {
+    label=<<b>STEP 2·OPTIMIZE：梯度优化（真正避障的地方）</b>>; labeljust="l"; fontsize=10.5;
+    color="#4527a0"; style="rounded"; bgcolor="#efeaf9";
+
+    dist  [label=<<b>distinctiveTrajs(segments)</b><br/><font point-size="8">use_distinctive_trajs = true 时<br/>按 x/y/z 正负向生成多条分支</font>>, fillcolor="#d1c4e9"];
+
+    lbfgs [label=<<b>BsplineOptimizeTrajRebound</b><br/><font point-size="8">L-BFGS，mem 16，≤200 iter，g_epsilon 0.01<br/>cost = λs·smooth + λc·distance + λf·feasibility<br/>　　 + λfit·fitness（+ swarm / moving-obj）</font>>, fillcolor="#d1c4e9", penwidth=1.6];
+
+    chk   [label=<<b>calcDistanceCostRebound → check_collision_and_rebound</b><br/><font point-size="8">iter &gt; 3 且“足够平滑”时触发<br/>发现新障碍 → 再次 initControlPoints → <b>再调 A*</b></font>>, fillcolor="#ffe082"];
+  }
+
+  // ---------- STEP 3 ----------
+  subgraph cluster_step3
+  {
+    label=<<b>STEP 3·REFINE：时间重分配（仅 pp_.drone_id ≤ 0 执行）</b>>;
+    labeljust="l"; fontsize=10.5; color="#b26a00"; style="rounded"; bgcolor="#fff4e5";
+
+    feas  [label=<<b>pos.checkFeasibility(ratio)</b><br/><font point-size="8">超限比例 &gt; feasibility_tolerance (0.05)<br/>才需要拉伸时间</font>>, fillcolor="#ffe0b2"];
+    refn  [label=<<b>refineTrajAlgo → reparamBspline</b><br/><font point-size="8">lengthenTime(ratio) → 重参数化<br/>→ BsplineOptimizeTrajRefine<br/>（多机模式直接跳过并打印<br/>“IN SWARM MODE, REFINE DISABLED!”）</font>>, fillcolor="#ffe0b2"];
+  }
+
+  save [label=<<b>updateTrajInfo(pos, now)</b><br/><font point-size="8">写 local_data_：start_time_, position/velocity/<br/>acceleration_traj_, duration_, traj_id_ += 1</font>>, fillcolor="#c8e6c9", penwidth=1.8];
+
+  pub  [label=<<b>callReboundReplan 出口</b><br/><font point-size="8">打包 traj_utils/Bspline 发布 planning/bspline<br/>have_new_target_ = false</font>>, fillcolor="#ffffff", penwidth=1.6];
+
+  // ---------- 边 ----------
+  sin -> gu;  tin -> gu;  gin -> tin [label="采样"];
+  gu  -> ts  [label="未到目标"];
+  ts  -> br;
+  br  -> polyA [label="是"];
+  br  -> polyB [label="否（重规划常态）"];
+  polyA -> param;  polyB -> param;
+  polyB -> polyA [label="点集异常长\nflag_force_polynomial", style=dashed];
+
+  param -> icp;
+  icp   -> astar [label="per 碰撞 segment"];
+  astar -> bp    [label="成功"];
+  icp   -> dist  [label="segments 为空 → 无需 A*，直接优化"];
+  bp    -> dist  [label="提供 distance cost 的参考方向"];
+
+  dist  -> lbfgs;
+  lbfgs -> chk   [label="每次迭代"];
+  chk   -> icp   [label="新障碍: 重新 initControlPoints", style=dashed, color="#c62828", fontcolor="#c62828"];
+  lbfgs -> feas  [label="优化成功后构造成本 UniformBspline"];
+  feas  -> refn  [label="不可行"];
+  feas  -> save  [label="可行，跳过 REFINE"];
+  refn  -> save;
+  save  -> pub;
+}
