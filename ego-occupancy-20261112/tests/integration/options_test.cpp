@@ -77,6 +77,18 @@ int main() {
     });
     ExpectFailure([] { Parse({"--bogus"}); });
     CHECK(Parse({"--help"}).help);
+    const auto live = Parse({"--live", "--lock-root", "/locks", "--vocabulary", "v",
+                             "--camera", "c", "--map-config", "m", "--output", "o"});
+    CHECK(live.serial == "042222071908");
+
+    const auto orbbec = Parse({"--live", "--camera-backend", "orbbec", "--lock-root", "/locks",
+                               "--vocabulary", "v", "--camera", "c", "--map-config", "m",
+                               "--output", "o"});
+    CHECK(orbbec.live && orbbec.serial.empty());
+    ExpectFailure([] {
+      Parse({"--dataset", "/d", "--camera-backend", "orbbec", "--vocabulary", "v",
+             "--camera", "c", "--map-config", "m", "--output", "o"});
+    });
 
     std::cout << "mode, paths, limits and unknown CLI validation passed\n";
   } catch (const std::exception& error) {

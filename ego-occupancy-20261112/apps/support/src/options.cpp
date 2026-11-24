@@ -11,11 +11,12 @@ std::string usage() {
          "--output NEW_DIR (--dataset DATA_DIR | --live --lock-root DIR) [--check] "
          "[--no-viewer] [--max-frames N] [--max-seconds S] [--stride N] "
          "[--planning-config YAML --probe-start-m M --probe-goal-m M] [--mapping-hz HZ] [--warmup "
-         "N] [--serial SERIAL] [--display-color depth|axis|flat]";
+         "N] [--camera-backend realsense|orbbec] [--serial SERIAL] [--display-color depth|axis|flat]";
 }
 
 Options parseOptions(const std::vector<std::string>& arguments) {
   Options options;
+  bool backend_selected = false;
 
   const auto realValue = [](const std::string& text) {
     std::size_t consumed = 0;
@@ -82,7 +83,16 @@ Options parseOptions(const std::vector<std::string>& arguments) {
         options.mapping_hz = realValue(value);
       } else if (argument == "--display-color") {
         options.display_color = value;
+      } else if (argument == "--camera-backend") {
+        backend_selected = true;
+        if (value == "realsense")
+          options.camera_backend = CameraBackend::RealSense;
+        else if (value == "orbbec")
+          options.camera_backend = CameraBackend::Orbbec;
+        else
+          throw std::invalid_argument("unknown camera backend: " + value);
       } else if (argument == "--serial") {
+        if (value.empty()) throw std::invalid_argument("empty camera serial");
         options.serial = value;
       } else {
         throw std::invalid_argument("unknown option: " + argument);
@@ -97,11 +107,13 @@ Options parseOptions(const std::vector<std::string>& arguments) {
       options.max_seconds < 0 ||
       (options.display_color != "depth" && options.display_color != "axis" &&
        options.display_color != "flat") ||
-      options.mapping_hz <= 0 || options.mapping_hz > 120 || options.serial.empty() ||
+      options.mapping_hz <= 0 || options.mapping_hz > 120 || (!options.live && backend_selected) ||
       (options.live && options.lock_root.empty())) {
     throw std::invalid_argument("invalid mode, paths or limits; " + usage());
   }
 
+  if (options.camera_backend == CameraBackend::RealSense && options.serial.empty())
+    options.serial = "042222071908";
   return options;
 }
 

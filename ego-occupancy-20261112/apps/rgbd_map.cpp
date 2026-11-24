@@ -117,9 +117,11 @@ std::vector<Input> LoadSequence(const Options& options, const CameraModel& camer
 
 class CameraLock {
  public:
-  explicit CameraLock(const fs::path& root) {
+  explicit CameraLock(const fs::path& root, CameraBackend backend) {
     try {
-      for (const char* name : {".d435i-capture.lock", ".orb-realtime.lock"}) {
+      const char* camera_lock =
+          backend == CameraBackend::Orbbec ? ".orbbec-capture.lock" : ".d435i-capture.lock";
+      for (const char* name : {camera_lock, ".orb-realtime.lock"}) {
         const auto path = root / name;
         const int descriptor = open(path.c_str(), O_CREAT | O_RDWR, 0600);
         if (descriptor < 0) {
@@ -185,6 +187,8 @@ int Run(int argc, char** argv) {
     if (!options.live) {
       inputs = LoadSequence(options, camera);
     } else {
+      if (!liveBackendAvailable(options.camera_backend))
+        throw std::invalid_argument("selected live camera backend was not built");
       cv::FileStorage storage(options.camera.string(), cv::FileStorage::READ);
       const double rate = static_cast<double>(storage["Camera.fps"]);
       if (!std::isfinite(rate) || rate < 1 || rate > 90 || std::floor(rate) != rate) {
@@ -225,7 +229,7 @@ int Run(int argc, char** argv) {
 
   std::unique_ptr<CameraLock> camera_lock;
   if (options.live) {
-    camera_lock = std::make_unique<CameraLock>(options.lock_root);
+    camera_lock = std::make_unique<CameraLock>(options.lock_root, options.camera_backend);
   }
 
   fs::create_directories(options.output);

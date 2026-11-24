@@ -20,6 +20,8 @@ struct LiveStats {
   std::uint64_t slam_dropped = 0;
 };
 
+bool liveBackendAvailable(CameraBackend backend);
+
 class LiveSource {
  public:
   LiveSource(const Options& options, const CameraModel& camera, int fps);

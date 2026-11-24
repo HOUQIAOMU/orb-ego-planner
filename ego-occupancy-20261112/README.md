@@ -33,6 +33,33 @@ bash scripts/run_ego_planner_validation.sh
 
 `build_ego_online_static.sh` 是完整构建加 CTest 的兼容入口。完整构建和在线预览共用 `build/release/bin/ego-rgbd-map`；普通建图不传规划参数时不启用在线规划。
 
+## 实时相机后端
+
+`ego-rgbd-map --live` 默认使用 RealSense。使用 Orbbec SDK v2 时，构建选择
+`-DEGO_BUILD_ORB=ON -DEGO_BUILD_ORBBEC=ON -DEGO_BUILD_REALSENSE=OFF`，
+并把 `OrbbecSDK_DIR` 指向厂商 SDK 的 CMake 配置目录。两个实时后端也可以同时启用。
+仅回放时可将两个实时后端都关闭，此时应用仍可用 `--dataset` 运行。
+
+```bash
+build/release/bin/ego-rgbd-map --live --camera-backend orbbec \
+  --vocabulary /path/to/ORBvoc.txt --camera /path/to/orbbec-camera.yaml \
+  --map-config config/ego-occupancy.yaml --output /path/to/new-output-dir \
+  --lock-root /path/to/existing-lock-dir --no-viewer
+```
+
+连接多台 Orbbec 时还要指定 `--serial`。Orbbec 路径使用软件 D2C，
+按 YAML 选择彩色分辨率和帧率，再选择同帧率的 Y16 深度。彩色校正支持原本无畸变的输出
+和标准 Brown–Conrady 模型。YAML 仍采用完整的 ORB-SLAM3 RGB-D 配置，
+其中 `Camera.type: "Rectified"`、`Camera.RGB: 0`、`Camera1.*` 对应送给 ORB 的彩色图。
+保留原始 Y16 值时，`RGBD.DepthMapFactor = 1000 / getValueScale()`，
+`getValueScale()` 取对齐后的深度帧，单位为毫米/原始单位。
+首个送入建图的帧之前会核对有效的输出内参、尺寸和深度比例。
+`--check` 只做配置预检，不打开设备。
+
+实时录制会在 `rgbd/` 下备份输入标定。Orbbec 保存为 `rgbd/Gemini.yaml`，
+RealSense 保存为 `rgbd/D435i.yaml`。运行目录根部另有通用备份 `camera.yaml`，
+回放可通过 `--camera` 指向任意一份对应的标定文件。
+
 ## 模块与查找索引
 
 各模块使用 `CMakeLists.txt`、`include/`、`src/`。公共引用方式仍为 `<ego_occupancy/...>`、`<ego_planner/...>`，桥接头文件仍为 `pose_bridge.h`。

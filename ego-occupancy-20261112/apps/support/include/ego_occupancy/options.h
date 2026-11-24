@@ -6,6 +6,8 @@
 
 namespace ego_occupancy {
 
+enum class CameraBackend { RealSense, Orbbec };
+
 struct Options {
   std::filesystem::path planning_config;
   double probe_start_m = 0.5;
@@ -16,7 +18,8 @@ struct Options {
   std::filesystem::path output;
   std::filesystem::path dataset;
   std::filesystem::path lock_root;
-  std::string serial = "042222071908";
+  CameraBackend camera_backend = CameraBackend::RealSense;
+  std::string serial;
   std::string display_color = "depth";
   bool live = false;
   bool check = false;
