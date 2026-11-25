@@ -21,6 +21,10 @@ if(EGO_BUILD_ORB)
   get_filename_component(EGO_CORE_DIR "${EGO_ORB_CORE}" DIRECTORY)
   set_target_properties(ego-rgbd-map PROPERTIES BUILD_RPATH
     "${EGO_CORE_DIR};${CMAKE_LIBRARY_OUTPUT_DIRECTORY};${ORB_SLAM3_ROOT}/Thirdparty/DBoW2/lib;${ORB_SLAM3_ROOT}/Thirdparty/g2o/lib")
+  if(EGO_BUILD_ORBBEC AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # SDK v1 needs its sibling libraries found through the executable's RPATH.
+    target_link_options(ego-rgbd-map PRIVATE "LINKER:--disable-new-dtags")
+  endif()
   if(EGO_BUILD_DISPLAY)
     target_compile_definitions(ego-rgbd-map PRIVATE EGO_HAS_DISPLAY)
     target_link_libraries(ego-rgbd-map PRIVATE ego_occupancy_display)

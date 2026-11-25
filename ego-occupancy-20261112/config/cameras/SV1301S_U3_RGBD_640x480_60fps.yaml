@@ -1,0 +1,45 @@
+%YAML:1.0
+---
+# Actual factory calibration read from SV1301S_U3 serial AY2R76300F2.
+# Input: decoded BGR 640x480 + software-D2C uint16 depth 640x480, 60 FPS.
+# Depth: Z_m = raw_value * 1.000000000000 / 1000.0; preserve zeros as invalid.
+# Supply original decoded color; do not externally undistort or resize with this YAML.
+# Camera.RGB=0 is for OpenCV BGR decoding; set to 1 only if the adapter supplies RGB.
+# Stereo.b: SDK IR-projector baseline in meters, NOT the depth-to-color translation norm.
+# Time matching remains the capture adapter's responsibility; SDK FrameSync is unsupported here.
+# ORB/Viewer parameters are starting settings, not calibrated quantities.
+
+File.version: "1.0"
+Camera.type: "PinHole"
+Camera1.fx: 453.954101562500
+Camera1.fy: 453.954101562500
+Camera1.cx: 326.956268310547
+Camera1.cy: 244.730529785156
+Camera1.k1: 0.043597158045
+Camera1.k2: -0.061980355531
+Camera1.p1: -0.000493320578
+Camera1.p2: 0.000071390656
+Camera1.k3: 0.000000000000
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 60
+Camera.RGB: 0
+Stereo.ThDepth: 40.000000000000
+Stereo.b: 0.040011928558
+RGBD.DepthMapFactor: 1000.000000000000
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.200000000000
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+Viewer.KeyFrameSize: 0.050000000000
+Viewer.KeyFrameLineWidth: 1.000000000000
+Viewer.GraphLineWidth: 0.900000000000
+Viewer.PointSize: 2.000000000000
+Viewer.CameraSize: 0.080000000000
+Viewer.CameraLineWidth: 3.000000000000
+Viewer.ViewpointX: 0.000000000000
+Viewer.ViewpointY: -0.700000000000
+Viewer.ViewpointZ: -1.800000000000
+Viewer.ViewpointF: 500.000000000000
+Viewer.imageViewScale: 1.000000000000

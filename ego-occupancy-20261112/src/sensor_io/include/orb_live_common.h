@@ -11,6 +11,33 @@
 #include <utility>
 
 namespace orb_live {
+
+inline constexpr std::uint64_t kMaxRgbdPairSkewUs = 10'000;
+
+// SDK v1 can emit incomplete or reused frame sets when FrameSync is unavailable.
+// A rejected candidate must leave both frames available for a later pairing.
+class HostPairGate {
+public:
+    bool accept(std::uint64_t color_index, std::uint64_t color_us,
+                std::uint64_t depth_index, std::uint64_t depth_us) {
+        if (!color_us || !depth_us) return false;
+        const auto skew = color_us >= depth_us ? color_us - depth_us : depth_us - color_us;
+        if (skew > kMaxRgbdPairSkewUs) return false;
+        if (accepted_ && (color_index <= color_index_ || depth_index <= depth_index_ ||
+                          color_us <= color_us_ || depth_us <= depth_us_)) return false;
+        color_index_ = color_index;
+        depth_index_ = depth_index;
+        color_us_ = color_us;
+        depth_us_ = depth_us;
+        accepted_ = true;
+        return true;
+    }
+
+private:
+    bool accepted_ = false;
+    std::uint64_t color_index_ = 0, depth_index_ = 0, color_us_ = 0, depth_us_ = 0;
+};
+
 template<class T> class BoundedQueue {
 public:
     explicit BoundedQueue(std::size_t capacity = 2, bool reject_full = false)

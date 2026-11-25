@@ -75,8 +75,9 @@ struct LiveSource::Impl {
     try {
       backend = OpenBackend(options, camera, fps);
       const bool realsense = options.camera_backend == CameraBackend::RealSense;
-      std::filesystem::copy_file(options.camera,
-                                 options.output / "rgbd" / (realsense ? "D435i.yaml" : "Gemini.yaml"));
+      const auto calibration_name =
+          realsense ? std::filesystem::path("D435i.yaml") : options.camera.filename();
+      std::filesystem::copy_file(options.camera, options.output / "rgbd" / calibration_name);
       cv::FileStorage metadata((options.output / "rgbd/device.yml").string(),
                                cv::FileStorage::WRITE);
       if (!metadata.isOpened()) throw std::runtime_error("cannot write camera metadata");
@@ -95,7 +96,7 @@ struct LiveSource::Impl {
   void CaptureLoop() {
     try {
       // 主逻辑
-      orb_live::TimestampGuard timestamps(0.010);
+      orb_live::TimestampGuard timestamps(orb_live::kMaxRgbdPairSkewUs * 1e-6);
       int warmup = options.warmup;
       std::uint64_t previous_color = 0;
       std::uint64_t previous_depth = 0;

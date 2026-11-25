@@ -35,30 +35,34 @@ bash scripts/run_ego_planner_validation.sh
 
 ## 实时相机后端
 
-`ego-rgbd-map --live` 默认使用 RealSense。使用 Orbbec SDK v2 时，构建选择
+`ego-rgbd-map --live` 默认使用 RealSense。使用 Orbbec SDK v1.10.37 时，构建选项为
 `-DEGO_BUILD_ORB=ON -DEGO_BUILD_ORBBEC=ON -DEGO_BUILD_REALSENSE=OFF`，
-并把 `OrbbecSDK_DIR` 指向厂商 SDK 的 CMake 配置目录。两个实时后端也可以同时启用。
-仅回放时可将两个实时后端都关闭，此时应用仍可用 `--dataset` 运行。
+并通过 `-DOrbbecSDK_ROOT=/path/to/OrbbecSDK_v1.10.37/SDK` 指向包含 `include/` 和 `lib/` 的 SDK 目录。
+在 RK3576 上使用对应的 ARM64 SDK。两个实时后端可以同时启用。仅回放时可关闭两者，应用仍可用 `--dataset`。
 
 ```bash
 build/release/bin/ego-rgbd-map --live --camera-backend orbbec \
-  --vocabulary /path/to/ORBvoc.txt --camera /path/to/orbbec-camera.yaml \
+  --vocabulary /path/to/ORBvoc.txt \
+  --camera config/cameras/SV1301S_U3_RGBD_640x480_60fps_rectified.yaml \
   --map-config config/ego-occupancy.yaml --output /path/to/new-output-dir \
   --lock-root /path/to/existing-lock-dir --no-viewer
 ```
 
-连接多台 Orbbec 时还要指定 `--serial`。Orbbec 路径使用软件 D2C，
-按 YAML 选择彩色分辨率和帧率，再选择同帧率的 Y16 深度。彩色校正支持原本无畸变的输出
-和标准 Brown–Conrady 模型。YAML 仍采用完整的 ORB-SLAM3 RGB-D 配置，
-其中 `Camera.type: "Rectified"`、`Camera.RGB: 0`、`Camera1.*` 对应送给 ORB 的彩色图。
-保留原始 Y16 值时，`RGBD.DepthMapFactor = 1000 / getValueScale()`，
-`getValueScale()` 取对齐后的深度帧，单位为毫米/原始单位。
-首个送入建图的帧之前会核对有效的输出内参、尺寸和深度比例。
-`--check` 只做配置预检，不打开设备。
+SV1301S_U3 的运行配置选择 640×480@60 的彩色流和 640×400@60 的原始深度流。
+v1 管线做软件 D2C，后端将彩色图校正到同一无畸变网格，再核对 640×480 输出内参及深度比例。
+`Orbbec.DepthWidth/DepthHeight` 指定的是对齐前尺寸。优先选 `Y16`，`Y11` 等原始格式需由 SDK 解包，
+应用只接收对齐后可按 `uint16` 读取的深度。
+`RGBD.DepthMapFactor = 1000 / getValueScale()`，以最终对齐帧的毫米/原始单位为准。
 
-实时录制会在 `rgbd/` 下备份输入标定。Orbbec 保存为 `rgbd/Gemini.yaml`，
-RealSense 保存为 `rgbd/D435i.yaml`。运行目录根部另有通用备份 `camera.yaml`，
-回放可通过 `--camera` 指向任意一份对应的标定文件。
+SV1301S_U3 的两路设备时钟不可直接比较，且不支持 SDK FrameSync。
+后端使用 SDK 报告的主机接收时间，只接收时差不超过 10 ms 的新帧对。
+接收时间不能证明曝光同步，实际时差和配对率需要上板检查。
+连接多台 Orbbec 时使用 `--serial`。 `--check` 只做配置预检，不打开设备。
+
+实时录制会在 `rgbd/` 下备份输入标定。Orbbec 沿用 `--camera` 指定文件的文件名，
+RealSense 保存为 `rgbd/D435i.yaml`。运行目录根部另有通用备份 `camera.yaml`。
+[原始 PinHole 标定](config/cameras/SV1301S_U3_RGBD_640x480_60fps.yaml)保留工厂畸变参数，
+上面命令使用单独的 [Rectified 运行配置](config/cameras/SV1301S_U3_RGBD_640x480_60fps_rectified.yaml)。
 
 ## 模块与查找索引
 

@@ -14,6 +14,7 @@ ego_test(occupancy-options-test integration/options_test.cpp ego_mapping_options
 ego_test(online-options-test integration/online_options_test.cpp ego_mapping_options online_options_contract)
 if(EGO_BUILD_RGBD)
   ego_test(occupancy-depth-test sensor_io/depth_test.cpp ego_occupancy_rgbd depth_contract)
+  ego_test(occupancy-host-pair-test sensor_io/host_pair_gate_test.cpp ego_occupancy_rgbd host_pair_gate_contract)
   ego_test(occupancy-worker-test sensor_io/worker_test.cpp ego_occupancy_rgbd worker_contract)
   ego_test(occupancy-current-frame-test sensor_io/current_frame_test.cpp ego_occupancy_rgbd current_frame_contract)
 endif()

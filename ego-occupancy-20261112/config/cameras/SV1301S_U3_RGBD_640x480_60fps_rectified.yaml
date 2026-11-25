@@ -1,0 +1,40 @@
+%YAML:1.0
+---
+# Rectified runtime profile derived from SV1301S_U3 factory calibration.
+# SDK v1 software D2C produces depth on the undistorted color grid.
+# The acquisition backend undistorts BGR with the same intrinsics, without cropping.
+# Depth scale measured after D2C: 1 mm per raw uint16 unit.
+# SDK host receive times are used for pairing; they do not prove exposure sync.
+# See the separate PinHole YAML for the original factory distortion.
+
+File.version: "1.0"
+Camera.type: "Rectified"
+Camera1.fx: 453.954101562500
+Camera1.fy: 453.954101562500
+Camera1.cx: 326.956268310547
+Camera1.cy: 244.730529785156
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 60
+Camera.RGB: 0
+Orbbec.DepthWidth: 640
+Orbbec.DepthHeight: 400
+Stereo.ThDepth: 40.000000000000
+Stereo.b: 0.040011928558
+RGBD.DepthMapFactor: 1000.000000000000
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.200000000000
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+Viewer.KeyFrameSize: 0.050000000000
+Viewer.KeyFrameLineWidth: 1.000000000000
+Viewer.GraphLineWidth: 0.900000000000
+Viewer.PointSize: 2.000000000000
+Viewer.CameraSize: 0.080000000000
+Viewer.CameraLineWidth: 3.000000000000
+Viewer.ViewpointX: 0.000000000000
+Viewer.ViewpointY: -0.700000000000
+Viewer.ViewpointZ: -1.800000000000
+Viewer.ViewpointF: 500.000000000000
+Viewer.imageViewScale: 1.000000000000
