@@ -11,7 +11,7 @@ std::string usage() {
          "--output NEW_DIR (--dataset DATA_DIR | --live --lock-root DIR) [--check] "
          "[--no-viewer] [--max-frames N] [--max-seconds S] [--stride N] "
          "[--planning-config YAML --probe-start-m M --probe-goal-m M] [--mapping-hz HZ] [--warmup "
-         "N] [--camera-backend realsense|orbbec] [--serial SERIAL] [--display-color depth|axis|flat]";
+         "N] [--record-hz HZ (live; 0 disables recording)] [--camera-backend realsense|orbbec] [--orbbec-timing] [--serial SERIAL] [--display-color depth|axis|flat]";
 }
 
 Options parseOptions(const std::vector<std::string>& arguments) {
@@ -46,6 +46,8 @@ Options parseOptions(const std::vector<std::string>& arguments) {
       options.live = true;
     } else if (argument == "--check") {
       options.check = true;
+    } else if (argument == "--orbbec-timing") {
+      options.orbbec_timing = true;
     } else if (argument == "--no-viewer") {
       options.viewer = false;
     } else {
@@ -83,6 +85,8 @@ Options parseOptions(const std::vector<std::string>& arguments) {
         options.mapping_hz = realValue(value);
       } else if (argument == "--display-color") {
         options.display_color = value;
+      } else if (argument == "--record-hz") {
+        options.record_hz = realValue(value);
       } else if (argument == "--camera-backend") {
         backend_selected = true;
         if (value == "realsense")
@@ -108,8 +112,13 @@ Options parseOptions(const std::vector<std::string>& arguments) {
       (options.display_color != "depth" && options.display_color != "axis" &&
        options.display_color != "flat") ||
       options.mapping_hz <= 0 || options.mapping_hz > 120 || (!options.live && backend_selected) ||
+      (options.record_hz && (!options.live || *options.record_hz < 0 || *options.record_hz > 90)) ||
       (options.live && options.lock_root.empty())) {
     throw std::invalid_argument("invalid mode, paths or limits; " + usage());
+  }
+
+  if (options.orbbec_timing && (!options.live || options.camera_backend != CameraBackend::Orbbec)) {
+    throw std::invalid_argument("--orbbec-timing requires live Orbbec capture");
   }
 
   if (options.camera_backend == CameraBackend::RealSense && options.serial.empty())

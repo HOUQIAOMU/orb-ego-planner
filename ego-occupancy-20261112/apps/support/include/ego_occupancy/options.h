@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,7 @@ struct Options {
   std::string display_color = "depth";
   bool live = false;
   bool check = false;
+  bool orbbec_timing = false;
   bool viewer = true;
   bool help = false;
   int max_frames = 0;
@@ -30,6 +32,7 @@ struct Options {
   int warmup = 30;
   double max_seconds = 120.0;
   double mapping_hz = 10.0;
+  std::optional<double> record_hz;
 };
 
 Options parseOptions(const std::vector<std::string>& arguments);

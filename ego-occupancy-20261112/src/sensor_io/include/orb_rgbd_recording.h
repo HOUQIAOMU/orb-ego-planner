@@ -12,7 +12,7 @@ namespace orb_live {
 using SteadyClock = std::chrono::steady_clock;
 struct RGBDFrame {
     cv::Mat color, depth; // owned BGR8 / aligned Z16; immutable after publication
-    double color_sec = 0, depth_sec = 0, valid_depth = 0;
+    double color_sec = 0, depth_sec = 0;
     std::uint64_t color_number = 0, depth_number = 0, index = 0;
     int color_domain = 0, depth_domain = 0;
     SteadyClock::time_point received, enqueued;
@@ -40,6 +40,8 @@ public:
         if (failed_) throw std::runtime_error("Recording writer stopped after previous commit error");
         if (p.color.empty() || p.color.type()!=CV_8UC3 || p.depth.type()!=CV_16UC1 || p.color.size()!=p.depth.size())
             throw std::runtime_error("Recorder requires matched owned BGR8/Z16 images");
+        const double valid_depth =
+            static_cast<double>(cv::countNonZero(p.depth)) / p.depth.total();
         std::ostringstream stem; stem << std::setw(6) << std::setfill('0') << count_;
         const std::string name=stem.str()+".png";
         const auto rgb=root_/"rgb"/name, depth=root_/"depth"/name;
@@ -54,7 +56,7 @@ public:
             fs::rename(rgb_tmp,rgb); rgb_committed=true;
             fs::rename(depth_tmp,depth); depth_committed=true;
             frames_ << count_ << ',' << p.color_sec << ',' << p.depth_sec << ',' << p.color_number << ',' << p.depth_number
-                    << ',' << p.color_domain << ',' << p.depth_domain << ',' << p.valid_depth << '\n';
+                    << ',' << p.color_domain << ',' << p.depth_domain << ',' << valid_depth << '\n';
             frames_.flush();
             associations_ << p.color_sec << " rgb/" << name << ' ' << p.depth_sec << " depth/" << name << '\n';
             associations_.flush();

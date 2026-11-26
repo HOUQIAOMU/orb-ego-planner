@@ -18,6 +18,11 @@ struct LiveStats {
   std::uint64_t color_gaps = 0;
   std::uint64_t depth_gaps = 0;
   std::uint64_t slam_dropped = 0;
+  std::uint64_t record_eligible = 0;
+  std::uint64_t record_skipped_by_rate = 0;
+  std::uint64_t record_queue_dropped = 0;
+  std::size_t record_queue_high_water = 0;
+  bool recording_failed = false;
 };
 
 bool liveBackendAvailable(CameraBackend backend);
@@ -32,6 +37,7 @@ class LiveSource {
   void stop();
   LiveStats stats() const;
   std::string error() const;
+  std::string recordingError() const;
 
  private:
   struct Impl;

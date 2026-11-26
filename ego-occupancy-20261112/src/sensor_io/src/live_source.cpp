@@ -1,12 +1,13 @@
 #include "live_source.h"
 
 #include "capture_backend.h"
+#include "live_dispatch.h"
 
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -52,9 +53,8 @@ struct LiveSource::Impl {
   CameraModel camera;
   int fps = 0;
   std::unique_ptr<CaptureBackend> backend;
-  orb_live::BoundedQueue<orb_live::FramePtr> live{2};
-  orb_live::BoundedQueue<orb_live::FramePtr> disk{64, true};
-  orb_live::SequenceWriter writer;
+  orb_live::LiveDispatch dispatch;
+  std::unique_ptr<orb_live::SequenceWriter> writer;
   std::atomic<bool> stopping{false};
   std::atomic<std::uint64_t> captured{0};
   std::atomic<std::uint64_t> recorded{0};
@@ -65,27 +65,40 @@ struct LiveSource::Impl {
   std::thread record_thread;
   std::string capture_error;
   std::string record_error;
+  std::atomic<bool> recording_failed{false};
   bool stopped = false;
 
   Impl(const Options& source_options, const CameraModel& camera_model, int frame_rate)
       : options(source_options),
         camera(camera_model),
         fps(frame_rate),
-        writer(options.output / "rgbd") {
+        dispatch(options.camera_backend == CameraBackend::Orbbec,
+                 options.camera_backend == CameraBackend::Orbbec
+                     ? std::optional<double>{options.record_hz.value_or(10.0)}
+                     : options.record_hz) {
     try {
       backend = OpenBackend(options, camera, fps);
       const bool realsense = options.camera_backend == CameraBackend::RealSense;
       const auto calibration_name =
           realsense ? std::filesystem::path("D435i.yaml") : options.camera.filename();
-      std::filesystem::copy_file(options.camera, options.output / "rgbd" / calibration_name);
-      cv::FileStorage metadata((options.output / "rgbd/device.yml").string(),
-                               cv::FileStorage::WRITE);
+      const auto data_dir = options.output / "rgbd";
+      std::filesystem::create_directories(data_dir);
+      std::filesystem::copy_file(options.camera, data_dir / calibration_name);
+      cv::FileStorage metadata((data_dir / "device.yml").string(), cv::FileStorage::WRITE);
       if (!metadata.isOpened()) throw std::runtime_error("cannot write camera metadata");
       metadata << "backend" << (realsense ? "realsense" : "orbbec");
       backend->writeDeviceMetadata(metadata);
       metadata.release();
 
-      record_thread = std::thread([this] { RecordLoop(); });
+      if (dispatch.recordingEnabled()) {
+        try {
+          writer = std::make_unique<orb_live::SequenceWriter>(data_dir);
+          record_thread = std::thread([this] { RecordLoop(); });
+        } catch (const std::exception& error) {
+          if (!dispatch.bestEffortRecording()) throw;
+          RecordingFailed(error);
+        }
+      }
       capture_thread = std::thread([this] { CaptureLoop(); });
     } catch (...) {
       Stop();
@@ -106,8 +119,11 @@ struct LiveSource::Impl {
       while (!stopping) {
         const auto sample = backend->read(200);
         if (!sample) {
-          if (std::chrono::duration<double>(Clock::now() - last_frame).count() > 5)
-            throw std::runtime_error("no RGB-D frames for 5 seconds");
+          if (std::chrono::duration<double>(Clock::now() - last_frame).count() > 5) {
+            const auto details = backend->frameTimeoutDetails();
+            throw std::runtime_error(details.empty() ? "no RGB-D frames for 5 seconds"
+                                                     : "no RGB-D frames for 5 seconds: " + details);
+          }
           continue;
         }
 
@@ -157,15 +173,10 @@ struct LiveSource::Impl {
         frame->depth_domain = depth_domain;
         frame->received = received;
         frame->enqueued = Clock::now();
-        frame->valid_depth =
-            static_cast<double>(cv::countNonZero(frame->depth)) / frame->depth.total();
-
-        if (!disk.push(frame)) {
+        if (!dispatch.publish(std::move(frame))) {
+          if (stopping) break;
           throw std::runtime_error(
               "recording queue overflow; stopping without evicting recorded frames");
-        }
-        if (!live.push(std::move(frame))) {
-          break;
         }
         if (options.max_frames &&
             captured >= static_cast<std::uint64_t>(options.max_frames)) {
@@ -177,29 +188,35 @@ struct LiveSource::Impl {
       stopping = true;
     }
 
-    live.close();
-    disk.close();
+    dispatch.close();
+  }
+
+  void RecordingFailed(const std::exception& error) {
+    record_error = error.what();
+    if (!dispatch.bestEffortRecording()) stopping = true;
+    dispatch.stopRecording();
+    recording_failed = true;
+    if (dispatch.bestEffortRecording()) {
+      std::cerr << "RECORDING_STOPPED " << record_error << '\n';
+    }
   }
 
   void RecordLoop() {
     try {
       orb_live::FramePtr frame;
-      while (disk.pop_for(frame, std::chrono::milliseconds(100)) || !disk.finished()) {
-        if (!frame) {
-          continue;
-        }
-        if (writer.count() % 15 == 0 &&
+      while (dispatch.nextRecording(frame, std::chrono::milliseconds(100)) ||
+             !dispatch.recordingFinished()) {
+        if (!frame) continue;
+        if (writer->count() % 15 == 0 &&
             std::filesystem::space(options.output).available < 256ULL * 1024 * 1024) {
           throw std::runtime_error("disk free space below 256MiB");
         }
-        writer.write(*frame);
-        recorded = writer.count();
+        writer->write(*frame);
+        recorded = writer->count();
         frame.reset();
       }
     } catch (const std::exception& error) {
-      record_error = error.what();
-      stopping = true;
-      disk.close();
+      RecordingFailed(error);
     }
   }
 
@@ -213,17 +230,16 @@ struct LiveSource::Impl {
     if (capture_thread.joinable()) {
       capture_thread.join();
     }
-    live.close();
-    disk.close();
-    if (record_thread.joinable()) {
-      record_thread.join();
-    }
+    dispatch.close();
     if (backend) {
       try {
         backend->stop();
       } catch (const std::exception& error) {
         if (capture_error.empty()) capture_error = error.what();
       }
+    }
+    if (record_thread.joinable()) {
+      record_thread.join();
     }
   }
 };
@@ -234,24 +250,36 @@ LiveSource::LiveSource(const Options& options, const CameraModel& camera, int fp
 LiveSource::~LiveSource() { stop(); }
 
 bool LiveSource::next(orb_live::FramePtr& frame, std::chrono::milliseconds timeout) {
-  return impl_->live.pop_for(frame, timeout);
+  return impl_->dispatch.next(frame, timeout);
 }
 
-bool LiveSource::finished() const { return impl_->live.finished(); }
+bool LiveSource::finished() const { return impl_->dispatch.finished(); }
 
 void LiveSource::stop() { impl_->Stop(); }
 
 LiveStats LiveSource::stats() const {
   auto& impl = *impl_;
+  const auto dispatch = impl.dispatch.stats();
   return {impl.captured, impl.recorded, impl.rejected, impl.color_gaps, impl.depth_gaps,
-          impl.live.dropped()};
+          dispatch.live_dropped, dispatch.record_eligible, dispatch.record_skipped_by_rate,
+          dispatch.record_queue_dropped, dispatch.record_queue_high_water, impl.recording_failed};
 }
 
 std::string LiveSource::error() const {
   if (!impl_->stopped) {
     throw std::logic_error("stop live source before reading errors");
   }
-  return impl_->capture_error.empty() ? impl_->record_error : impl_->capture_error;
+  if (!impl_->capture_error.empty() || impl_->dispatch.bestEffortRecording()) {
+    return impl_->capture_error;
+  }
+  return impl_->record_error;
+}
+
+std::string LiveSource::recordingError() const {
+  if (!impl_->stopped) {
+    throw std::logic_error("stop live source before reading errors");
+  }
+  return impl_->record_error;
 }
 
 }  // namespace ego_occupancy

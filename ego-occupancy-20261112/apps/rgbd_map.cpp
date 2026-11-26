@@ -31,6 +31,7 @@
 #endif
 
 #include "System.h"
+#include "live_dispatch.h"
 #include "live_source.h"
 
 namespace fs = std::filesystem;
@@ -289,17 +290,42 @@ int Run(int argc, char** argv) {
   std::ofstream tracking(options.output / "poses.csv");
   tracking.exceptions(std::ios::failbit | std::ios::badbit);
   tracking << "capture_index,orb_frame,timestamp_sec,depth_timestamp_sec,state,captured,"
-              "pose_frame_verified,session,map_token,revision,track_ms,tx_m,ty_m,tz_m\n"
+              "pose_frame_verified,session,map_token,revision,track_ms,tx_m,ty_m,tz_m,slam_input_host_age_ms\n"
            << std::setprecision(std::numeric_limits<double>::max_digits10);
 
   std::uint64_t processed = 0;
   std::uint64_t valid = 0;
+  std::uint64_t slam_stale_dropped = 0;
+  int tracking_state = -1;
+  std::uint64_t tracking_revision = 0;
   std::uint64_t last_submitted = 0;
   bool have_submitted = false;
   double last_map_time = -std::numeric_limits<double>::infinity();
   const auto started = Clock::now();
   auto last_progress = started;
   std::string failure;
+
+  const auto checkWorkersAndReport = [&](Clock::time_point now) {
+#ifdef EGO_HAS_PLANNER
+    if (planning) {
+      const auto error = planning->error();
+      if (!error.empty()) throw std::runtime_error("online planning failed: " + error);
+    }
+#endif
+    const auto stats = mapping.stats();
+    if (!stats.error.empty()) throw std::runtime_error(stats.error);
+    if (now - last_progress < std::chrono::seconds(1)) return;
+    const auto input = live ? live->stats() : LiveStats{};
+    std::cout << "MAP_PROGRESS processed=" << processed << " verified=" << valid
+              << " state=" << tracking_state << " revision=" << tracking_revision
+              << " fused=" << stats.fused << " rejected=" << stats.rejected
+              << " queue_drop=" << stats.dropped << " fuse_ms=" << stats.last_fuse_ms
+              << " inflate_ms=" << stats.last_inflate_ms << " age_ms=" << stats.last_age_ms
+              << " captured=" << input.captured << " recorded=" << input.recorded
+              << " record_queue_dropped=" << input.record_queue_dropped
+              << " slam_stale_dropped=" << slam_stale_dropped << '\n';
+    last_progress = now;
+  };
 
   std::cout << "MAPPING_READY mode=" << (options.live ? "live" : "replay")
             << " output=" << fs::absolute(options.output)
@@ -321,9 +347,8 @@ int Run(int argc, char** argv) {
       orb_live::FramePtr frame;
       if (live) {
         if (!live->next(frame, std::chrono::milliseconds(100))) {
-          if (live->finished()) {
-            break;
-          }
+          if (live->finished()) break;
+          checkWorkersAndReport(Clock::now());
           continue;
         }
       } else {
@@ -350,10 +375,18 @@ int Run(int argc, char** argv) {
       }
 
       const auto before = Clock::now();
+      if (live && options.camera_backend == CameraBackend::Orbbec &&
+          !orb_live::isFreshForTracking(*frame, before)) {
+        ++slam_stale_dropped;
+        checkWorkersAndReport(before);
+        continue;
+      }
       slam->TrackRGBD(frame->color, frame->depth, frame->color_sec);
       const auto after = Clock::now();
       const auto record = ego_pose_bridge::Last();
       ++processed;
+      tracking_state = record.tracking_state;
+      tracking_revision = record.revision;
 
       const bool bound = record.captured && record.timestamp_sec == frame->color_sec &&
                          ego_pose_bridge::IsCurrent(record);
@@ -378,7 +411,11 @@ int Run(int argc, char** argv) {
                << bound << ',' << record.session << ',' << record.map_token << ','
                << record.revision << ','
                << std::chrono::duration<double, std::milli>(after - before).count() << ','
-               << transform(0, 3) << ',' << transform(1, 3) << ',' << transform(2, 3) << '\n';
+               << transform(0, 3) << ',' << transform(1, 3) << ',' << transform(2, 3) << ',';
+      if (live) {
+        tracking << std::chrono::duration<double, std::milli>(before - frame->received).count();
+      }
+      tracking << '\n';
       tracking.flush();
 
       if (bound && (frame->color_sec - last_map_time >= 1.0 / options.mapping_hz)) {
@@ -392,29 +429,14 @@ int Run(int argc, char** argv) {
         }
       }
 
-#ifdef EGO_HAS_PLANNER
-      if (planning && !planning->error().empty())
-        throw std::runtime_error("online planning failed: " + planning->error());
-#endif
-      const auto stats = mapping.stats();
-      if (!stats.error.empty()) {
-        throw std::runtime_error(stats.error);
-      }
-
-      if (std::chrono::duration<double>(after - last_progress).count() >= 1) {
-        std::cout << "MAP_PROGRESS processed=" << processed << " verified=" << valid
-                  << " state=" << record.tracking_state << " revision=" << record.revision
-                  << " fused=" << stats.fused << " rejected=" << stats.rejected
-                  << " queue_drop=" << stats.dropped << " fuse_ms=" << stats.last_fuse_ms
-                  << " inflate_ms=" << stats.last_inflate_ms << " age_ms=" << stats.last_age_ms
-                  << '\n';
-        last_progress = after;
-      }
+      checkWorkersAndReport(after);
     }
   } catch (const std::exception& error) {
     failure = error.what();
   }
 
+  // Flush and final map export are outside the timed input window.
+  const auto input_ended = Clock::now();
   if (live) {
     live->stop();
     if (!live->error().empty()) {
@@ -484,13 +506,32 @@ int Run(int argc, char** argv) {
           << static_cast<double>(live_stats.pair_rejected) << "sdk_color_gaps"
           << static_cast<double>(live_stats.color_gaps) << "sdk_depth_gaps"
           << static_cast<double>(live_stats.depth_gaps) << "slam_queue_dropped"
-          << static_cast<double>(live_stats.slam_dropped) << "peak_rss_mib"
+          << static_cast<double>(live_stats.slam_dropped)
+          << "slam_stale_dropped" << static_cast<double>(slam_stale_dropped)
+          << "record_eligible" << static_cast<double>(live_stats.record_eligible)
+          << "record_skipped_by_rate" << static_cast<double>(live_stats.record_skipped_by_rate)
+          << "record_queue_dropped" << static_cast<double>(live_stats.record_queue_dropped)
+          << "record_queue_high_water" << static_cast<double>(live_stats.record_queue_high_water)
+          << "recording_failure" << (live ? live->recordingError() : std::string{})
+          << "peak_rss_mib"
           << memory.ru_maxrss / 1024.0 << "has_snapshot" << static_cast<int>(bool(snapshot))
           << "final_snapshot_is_live" << 0 << "failure" << failure;
+  if (live) {
+    // FileStorage stores the integer stamps as text to preserve nanosecond precision.
+    const auto monotonicNs = [](Clock::time_point stamp) {
+      return std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                stamp.time_since_epoch()).count());
+    };
+    summary << "window_start_monotonic_ns" << monotonicNs(started)
+            << "window_end_monotonic_ns" << monotonicNs(input_ended)
+            << "mapping_target_hz" << options.mapping_hz;
+  }
 
   std::cout << "MAPPING_FINISHED processed=" << processed << " verified=" << valid
             << " fused=" << stats.fused << " snapshot=" << bool(snapshot)
             << " captured=" << live_stats.captured << " recorded=" << live_stats.recorded
+            << " record_queue_dropped=" << live_stats.record_queue_dropped
+            << " slam_stale_dropped=" << slam_stale_dropped
             << " peak_rss_mib=" << memory.ru_maxrss / 1024.0 << " failure=" << failure << '\n';
 
   if (!failure.empty()) {

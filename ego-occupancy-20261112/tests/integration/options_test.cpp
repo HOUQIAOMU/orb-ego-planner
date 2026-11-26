@@ -84,7 +84,34 @@ int main() {
     const auto orbbec = Parse({"--live", "--camera-backend", "orbbec", "--lock-root", "/locks",
                                "--vocabulary", "v", "--camera", "c", "--map-config", "m",
                                "--output", "o"});
-    CHECK(orbbec.live && orbbec.serial.empty());
+    CHECK(orbbec.live && orbbec.serial.empty() && !orbbec.record_hz);
+    const std::vector<std::string> live_args{
+        "--live", "--camera-backend", "orbbec", "--lock-root", "/locks",
+        "--vocabulary", "v", "--camera", "c", "--map-config", "m", "--output", "o"};
+    auto timingArgs = live_args;
+    timingArgs.emplace_back("--orbbec-timing");
+    CHECK(parseOptions(timingArgs).orbbec_timing);
+    timingArgs[2] = "realsense";
+    ExpectFailure([&] { parseOptions(timingArgs); });
+    ExpectFailure([] {
+      Parse({"--dataset", "/d", "--vocabulary", "v", "--camera", "c",
+             "--map-config", "m", "--output", "o", "--orbbec-timing"});
+    });
+    auto recordArgs = live_args;
+    recordArgs.insert(recordArgs.end(), {"--record-hz", "0"});
+    CHECK(parseOptions(recordArgs).record_hz == 0);
+    recordArgs.back() = "10";
+    CHECK(parseOptions(recordArgs).record_hz == 10);
+    for (const char* rate : {"-1", "nan", "91"}) {
+      recordArgs.back() = rate;
+      ExpectFailure([&] { parseOptions(recordArgs); });
+    }
+    recordArgs.pop_back();
+    ExpectFailure([&] { parseOptions(recordArgs); });
+    ExpectFailure([] {
+      Parse({"--dataset", "/d", "--vocabulary", "v", "--camera", "c",
+             "--map-config", "m", "--output", "o", "--record-hz", "10"});
+    });
     ExpectFailure([] {
       Parse({"--dataset", "/d", "--camera-backend", "orbbec", "--vocabulary", "v",
              "--camera", "c", "--map-config", "m", "--output", "o"});

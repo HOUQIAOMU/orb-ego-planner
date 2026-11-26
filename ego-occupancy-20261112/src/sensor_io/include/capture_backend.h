@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 
 #include "live_source.h"
 
@@ -22,6 +23,7 @@ class CaptureBackend {
 
   virtual void writeDeviceMetadata(cv::FileStorage& metadata) const = 0;
   virtual std::optional<CaptureMetadata> read(int timeout_ms) = 0;
+  virtual std::string frameTimeoutDetails() const { return {}; }
   // Called after synchronization and warm-up checks, while the SDK frames are still alive.
   virtual void copyImages(orb_live::RGBDFrame& output) = 0;
   virtual void stop() = 0;

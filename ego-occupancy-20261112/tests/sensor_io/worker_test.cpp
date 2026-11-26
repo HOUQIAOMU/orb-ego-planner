@@ -1,10 +1,14 @@
 #include <ego_occupancy/worker.h>
 
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
 using namespace ego_occupancy;
+namespace fs = std::filesystem;
 
 #define CHECK(condition)                                                       \
   do {                                                                         \
@@ -12,6 +16,21 @@ using namespace ego_occupancy;
       throw std::runtime_error(#condition);                                    \
     }                                                                          \
   } while (false)
+
+struct Scratch {
+  Scratch() {
+    auto pattern = (fs::temp_directory_path() / "ego-worker-test-XXXXXX").string();
+    CHECK(mkdtemp(pattern.data()));
+    path = pattern;
+  }
+
+  ~Scratch() {
+    std::error_code error;
+    fs::remove_all(path, error);
+  }
+
+  fs::path path;
+};
 
 ego_pose_bridge::Record MakeFrame(std::uint64_t index) {
   static int map_identity = 0;
@@ -39,7 +58,10 @@ int main() {
     camera.depth_scale = 0.001;
     camera.stride = 1;
 
-    MappingWorker worker(config, camera);
+    Scratch scratch;
+    const auto diagnostics = scratch.path / "mapping.csv";
+    MappingWorker worker(config, camera, diagnostics);
+    const auto started = Clock::now();
     cv::Mat depth(1, 3, CV_16UC1, cv::Scalar(1000));
 
     CHECK(worker.submit(depth, MakeFrame(1), 1, Clock::now()));
@@ -65,6 +87,19 @@ int main() {
     CHECK(!worker.reader().isUsable(second));
     CHECK(worker.reader().latestForDisplay());
     CHECK(worker.stats().fused == 2);
+
+    const auto ended = Clock::now();
+    std::ifstream log(diagnostics);
+    std::string row;
+    CHECK(std::getline(log, row) && row.find("completed_monotonic_ns") != std::string::npos);
+    auto previous = started;
+    for (int update = 0; update < 2; ++update) {
+      CHECK(std::getline(log, row));
+      const auto stamp = Clock::time_point{
+          std::chrono::nanoseconds(std::stoll(row.substr(row.rfind(',') + 1)))};
+      CHECK(previous <= stamp && stamp <= ended);
+      previous = stamp;
+    }
 
     std::cout << "worker pairing, correction invalidation, recovery and shutdown passed\n";
   } catch (const std::exception& error) {

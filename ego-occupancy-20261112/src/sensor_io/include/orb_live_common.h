@@ -50,11 +50,15 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             if (closed_) return false;
             if (items_.size() == capacity_) {
-                if (reject_full_) return false;
+                if (reject_full_) {
+                    ++dropped_;
+                    return false;
+                }
                 discarded.emplace(std::move(items_.front()));
                 items_.pop_front(); ++dropped_;
             }
             items_.push_back(std::move(value));
+            if (items_.size() > high_water_) high_water_ = items_.size();
         }
         // Destroy evicted image storage after releasing the queue lock.
         ready_.notify_one();
@@ -67,12 +71,19 @@ public:
         value = std::move(items_.front()); items_.pop_front();
         return true;
     }
-    void close() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        closed_ = true; ready_.notify_all();
+    void close(bool discard_pending = false) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            closed_ = true;
+            if (discard_pending) items_.clear();
+        }
+        ready_.notify_all();
     }
     std::uint64_t dropped() const {
         std::lock_guard<std::mutex> lock(mutex_); return dropped_;
+    }
+    std::size_t high_water() const {
+        std::lock_guard<std::mutex> lock(mutex_); return high_water_;
     }
     std::size_t size() const {
         std::lock_guard<std::mutex> lock(mutex_); return items_.size();
@@ -88,6 +99,7 @@ private:
     std::condition_variable ready_;
     bool closed_ = false;
     std::uint64_t dropped_ = 0;
+    std::size_t high_water_ = 0;
 };
 
 class TimestampGuard {

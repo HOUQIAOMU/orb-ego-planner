@@ -1,4 +1,5 @@
 #include "capture_backend.h"
+#include "orbbec_timing.h"
 
 #include <libobsensor/ObSensor.hpp>
 #include <opencv2/calib3d.hpp>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -143,6 +145,7 @@ class OrbbecBackend final : public CaptureBackend {
     // read() validates completeness, uniqueness and skew on the host clock.
     config->setFrameAggregateOutputMode(OB_FRAME_AGGREGATE_OUTPUT_ANY_SITUATION);
     pipeline_.start(config);
+    if (options.orbbec_timing) timing_ = std::make_unique<orb_live::OrbbecTimingLog>();
   }
 
   void writeDeviceMetadata(cv::FileStorage& metadata) const override {
@@ -157,18 +160,41 @@ class OrbbecBackend final : public CaptureBackend {
 
   std::optional<CaptureMetadata> read(int timeout_ms) override {
     const auto frames = pipeline_.waitForFrames(timeout_ms);
-    if (!frames) return std::nullopt;
     const auto received = Clock::now();
+    if (!frames) {
+      ++misses_.sdk_timeouts;
+      RecordTiming(received, orb_live::TimingOutcome::SdkTimeout, nullptr, nullptr);
+      return std::nullopt;
+    }
     const auto color = frames->colorFrame();
     const auto depth = frames->depthFrame();
-    if (!color || !depth) return std::nullopt;
+    if (!color || !depth) {
+      ++misses_.incomplete;
+      RecordTiming(received, orb_live::TimingOutcome::Incomplete, color, depth);
+      return std::nullopt;
+    }
 
     // Device timestamps for the two streams are not comparable on this camera.
     const auto color_us = color->systemTimeStampUs();
     const auto depth_us = depth->systemTimeStampUs();
     const auto color_index = color->index();
     const auto depth_index = depth->index();
-    if (!pair_gate_.accept(color_index, color_us, depth_index, depth_us)) return std::nullopt;
+    if (!pair_gate_.accept(color_index, color_us, depth_index, depth_us)) {
+      const auto skew = color_us >= depth_us ? color_us - depth_us : depth_us - color_us;
+      if (color_us && depth_us && skew > orb_live::kMaxRgbdPairSkewUs) {
+        ++misses_.skew_rejected;
+        if (misses_.skew_rejected == 1) misses_.min_skew_us = skew;
+        misses_.min_skew_us = std::min(misses_.min_skew_us, skew);
+        misses_.max_skew_us = std::max(misses_.max_skew_us, skew);
+        RecordTiming(received, orb_live::TimingOutcome::SkewRejected, color, depth);
+      } else {
+        ++misses_.unusable;
+        RecordTiming(received, orb_live::TimingOutcome::NoncurrentOrInvalid, color, depth);
+      }
+      return std::nullopt;
+    }
+    RecordTiming(received, orb_live::TimingOutcome::Accepted, color, depth);
+    misses_ = {};
     if (!host_origin_us_) host_origin_us_ = std::min(color_us, depth_us);
     frames_ = frames;
     constexpr int host_receive_clock = 1;
@@ -176,6 +202,18 @@ class OrbbecBackend final : public CaptureBackend {
                            (depth_us - *host_origin_us_) * 1e-6,
                            color_index, depth_index, host_receive_clock, host_receive_clock,
                            received};
+  }
+
+  std::string frameTimeoutDetails() const override {
+    std::ostringstream out;
+    out << "Orbbec sdk_timeouts=" << misses_.sdk_timeouts
+        << " incomplete=" << misses_.incomplete
+        << " skew_rejected=" << misses_.skew_rejected
+        << " noncurrent_or_invalid=" << misses_.unusable;
+    if (misses_.skew_rejected) {
+      out << " skew_us_min=" << misses_.min_skew_us << " skew_us_max=" << misses_.max_skew_us;
+    }
+    return out.str();
   }
 
   void copyImages(orb_live::RGBDFrame& output) override {
@@ -211,9 +249,26 @@ class OrbbecBackend final : public CaptureBackend {
     output.depth = y16.clone();
   }
 
-  void stop() override { pipeline_.stop(); }
+  void stop() override {
+    pipeline_.stop();
+    if (timing_) timing_->finish();
+  }
 
  private:
+  void RecordTiming(TimePoint received, orb_live::TimingOutcome outcome,
+                    const std::shared_ptr<ob::Frame>& color,
+                    const std::shared_ptr<ob::Frame>& depth) {
+    if (!timing_) return;
+    const auto timestamps = [](const std::shared_ptr<ob::Frame>& frame)
+        -> std::optional<orb_live::FrameTiming> {
+      if (!frame) return std::nullopt;
+      return orb_live::FrameTiming{frame->index(), frame->timeStampUs(), frame->systemTimeStampUs()};
+    };
+    const auto stamp_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(received.time_since_epoch()).count();
+    timing_->push({0, stamp_ns, outcome, timestamps(color), timestamps(depth)});
+  }
+
   void PrepareColorRectification(const OBCameraParam& calibration, const cv::Size& size) {
     // The v1 calibration API exports Brown–Conrady coefficients without a model tag.
     if (IsRectified(calibration.rgbDistortion)) return;
@@ -233,6 +288,15 @@ class OrbbecBackend final : public CaptureBackend {
   ob::Pipeline pipeline_;
   std::shared_ptr<ob::FrameSet> frames_;
   orb_live::HostPairGate pair_gate_;
+  std::unique_ptr<orb_live::OrbbecTimingLog> timing_;
+  struct {
+    std::uint64_t sdk_timeouts = 0;
+    std::uint64_t incomplete = 0;
+    std::uint64_t skew_rejected = 0;
+    std::uint64_t unusable = 0;
+    std::uint64_t min_skew_us = 0;
+    std::uint64_t max_skew_us = 0;
+  } misses_;
   std::optional<std::uint64_t> host_origin_us_;
   bool calibration_ready_ = false;
   cv::Mat color_map_x_, color_map_y_;

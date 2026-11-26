@@ -51,7 +51,7 @@ struct MappingWorker::Impl {
       log.open(diagnostics);
       log.exceptions(std::ios::failbit | std::ios::badbit);
       log << "capture_index,orb_frame,source_map,source_revision,accepted,published,"
-             "valid_rays,updated_voxels,fuse_ms,inflate_ms,publish_ms,age_ms,reason\n"
+             "valid_rays,updated_voxels,fuse_ms,inflate_ms,publish_ms,age_ms,reason,completed_monotonic_ns\n"
           << std::setprecision(9);
     }
 
@@ -132,15 +132,20 @@ struct MappingWorker::Impl {
         mapper.invalidate(stats.error);
       }
 
+      // Stamp the completed update using the same clock as the live window.
+      const auto completed_at = Clock::now();
       const double age =
-          std::chrono::duration<double, std::milli>(Clock::now() - job.received).count();
+          std::chrono::duration<double, std::milli>(completed_at - job.received).count();
       try {
         if (log) {
           log << job.index << ',' << job.record.frame_id << ',' << job.record.map_token << ','
               << job.record.revision << ',' << result.accepted << ',' << result.published
               << ',' << result.valid_rays << ',' << result.updated_voxels << ','
               << result.fuse_ms << ',' << result.inflate_ms << ',' << result.publish_ms
-              << ',' << age << ',' << result.reason << '\n';
+              << ',' << age << ',' << result.reason << ','
+              << std::chrono::duration_cast<std::chrono::nanoseconds>(
+                     completed_at.time_since_epoch()).count()
+              << '\n';
           log.flush();
         }
       } catch (const std::exception& error) {

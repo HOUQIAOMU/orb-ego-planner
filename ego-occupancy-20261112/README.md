@@ -1,8 +1,8 @@
 # EGO 占据建图与无 ROS 规划
 
-本项目在 RK3576 上使用 D435i、ORB-SLAM3 和同进程占据地图，提供实时／回放建图、地图保存加载、离线 A* 与 B 样条规划，以及固定起终点的在线静态轨迹预览。控制器、移动起点连续规划和主动探索不在当前交付范围内。
+本项目在 RK3576 上使用 Orbbec 或 D435i、ORB-SLAM3 和同进程占据地图，提供实时／回放建图、地图保存加载、离线 A* 与 B 样条规划，以及固定起终点的在线静态轨迹预览。控制器、移动起点连续规划和主动探索不在当前交付范围内。
 
-工程位置：`/home/lckfb/orb-slam3/ego-occupancy-20261112`。用户入口统一位于父项目 `scripts/`，项目内部 `scripts/` 保存构建辅助与验收工具。
+工程位置：`/home/lckfb/orb-slam3/ego-occupancy-20261112`。父项目 `scripts/` 提供板端入口，在线建图脚本的实现保存在本工程的 `scripts/run_ego_occupancy.sh`。
 
 ## 常用命令
 
@@ -35,6 +35,11 @@ bash scripts/run_ego_planner_validation.sh
 
 ## 实时相机后端
 
+`run_ego_occupancy.sh` 在线默认使用 Orbbec SV1301S_U3 的 60 Hz Rectified 配置，
+建图提交上限为 `--mapping-hz 20`。可以显式传 `--camera-backend orbbec`（也接受 `--camera-end orbbec`），
+脚本会自动选相应 YAML。`--camera` 和 `--mapping-hz` 可覆盖默认值；
+使用 RealSense 时传 `--camera-backend realsense`。
+
 `ego-rgbd-map --live` 默认使用 RealSense。使用 Orbbec SDK v1.10.37 时，构建选项为
 `-DEGO_BUILD_ORB=ON -DEGO_BUILD_ORBBEC=ON -DEGO_BUILD_REALSENSE=OFF`，
 并通过 `-DOrbbecSDK_ROOT=/path/to/OrbbecSDK_v1.10.37/SDK` 指向包含 `include/` 和 `lib/` 的 SDK 目录。
@@ -58,6 +63,15 @@ SV1301S_U3 的两路设备时钟不可直接比较，且不支持 SDK FrameSync�
 后端使用 SDK 报告的主机接收时间，只接收时差不超过 10 ms 的新帧对。
 接收时间不能证明曝光同步，实际时差和配对率需要上板检查。
 连接多台 Orbbec 时使用 `--serial`。 `--check` 只做配置预检，不打开设备。
+定位 RGB-D 时间配对时，可在在线脚本加 `--orbbec-timing`。终端和 `run.log` 会逐组输出 `ORBBEC_TIMING`，
+记录 SDK 返回的彩色和深度帧号、设备时间、主机接收时间及配对结果。最后的 `dropped` 是诊断记录丢弃数。
+
+60 Hz 实采时，Orbbec 实时分支只保留最新的待跟踪帧，应用内帧龄超过 100 ms 的帧跳过。
+图像录制默认最多选 10 对/秒，待写队列最多 8 对。可用 `--record-hz 5` 降低录制频率，
+或用 `--record-hz 0` 关闭图像录制，位姿、地图和相机标定照常保存。
+`summary.yml` 中的 `record_queue_dropped` 表示录制队列满时跳过的对数，
+`recording_failure` 表示独立的录制错误，`slam_stale_dropped` 表示实时输入过期跳过的对数。
+`poses.csv` 的 `slam_input_host_age_ms` 从应用拿到 SDK 帧对起算。
 
 实时录制会在 `rgbd/` 下备份输入标定。Orbbec 沿用 `--camera` 指定文件的文件名，
 RealSense 保存为 `rgbd/D435i.yaml`。运行目录根部另有通用备份 `camera.yaml`。
